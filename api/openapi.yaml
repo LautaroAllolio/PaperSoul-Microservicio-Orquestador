@@ -1,0 +1,332 @@
+openapi: 3.1.0
+info:
+  title: PaperSoul — Orquestador y Validador de PDFs
+  version: 1.0.0
+  description: >-
+    Microservicio que recibe PDFs binarios vía multipart/form-data, los valida
+    íntegramente en memoria (magic bytes `%PDF-`, límite de tamaño con
+    http.MaxBytesReader, estructura y cifrado mediante pdfcpu) y orquesta dos
+    microservicios downstream: Extracción y Persistencia.
+
+    Semántica de deduplicación: el orquestador calcula el SHA-256 del binario
+    y consulta a Persistencia antes de extraer. Si el checksum ya existe, no se
+    invoca al Extractor y se reaprovecha el resultado persistido (status
+    `REUSED`). Si no existe, se extrae y se persiste (status `PROCESSED`).
+
+    Semántica de reintentos: gracias a la deduplicación por checksum, reintentar
+    esta operación tras un 502/504 es seguro a nivel de efecto (idempotencia por
+    contenido), siempre que Persistencia garantice unicidad del checksum (ver
+    contrato downstream). No se requiere header Idempotency-Key en v1.
+
+    Todos los errores HTTP se modelan bajo RFC 9457 (`application/problem+json`).
+  contact:
+    name: PaperSoul team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local
+
+tags:
+  - name: Documents
+
+paths:
+  /api/v1/documents/process:
+    post:
+      tags:
+        - Documents
+      summary: Procesa un PDF
+      description: >-
+        Recibe el binario del PDF como campo `file`. El archivo nunca se persiste
+        en disco ni en almacenamiento de objetos: fluye en memoria (buffer
+        acotado) desde el upload hasta el microservicio de Extracción.
+        Respuesta 200: `PROCESSED` si el documento es nuevo, `REUSED` si ya
+        existía (dedup por checksum) y el resultado se obtuvo de Persistencia.
+      operationId: processDocument
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: >-
+                    Binario del PDF a procesar. Máximo 25 MiB
+                    (HTTP 413 si se excede).
+            encoding:
+              file:
+                contentType: application/pdf
+      responses:
+        '200':
+          description: >-
+            Documento procesado o reutilizado. `documentId` proviene de
+            Persistencia.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessDocumentResponse'
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+components:
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: >-
+        Identificador de trazabilidad opcional. Se refleja en el campo
+        `instance` de cualquier Problem y se reenvía a los downstream
+        (Extracción y Persistencia) para correlacionar logs.
+
+  headers:
+    CorrelationId:
+      required: false
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Petición mal formada (multipart inválido o campo `file` ausente).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:invalid-multipart
+            title: Petición inválida
+            status: 400
+            detail: Falta el campo multipart "file".
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+            invalid_params:
+              - name: file
+                reason: required
+    PayloadTooLarge:
+      description: El binario excede el límite de tamaño configurado.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:file-too-large
+            title: Archivo demasiado grande
+            status: 413
+            detail: El archivo excede el límite de 25 MiB.
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+            invalid_params:
+              - name: file
+                reason: 'max_size_exceeded'
+    UnprocessableEntity:
+      description: >-
+        El binario no es un PDF, el PDF está corrupto o está cifrado. Cualquier
+        fallo de validación de contenido.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            invalid-header:
+              summary: Magic bytes incorrectos
+              value:
+                type: urn:papersoul:orchestrator:invalid-pdf-header
+                title: El archivo no es un PDF válido
+                status: 422
+                detail: El archivo no comienza con el encabezado "%PDF-".
+                instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+                invalid_params:
+                  - name: file
+                    reason: invalid_magic_bytes
+            corrupted:
+              summary: Estructura PDF inválida (pdfcpu)
+              value:
+                type: urn:papersoul:orchestrator:invalid-pdf
+                title: El documento PDF está corrupto
+                status: 422
+                detail: La validación estructural con pdfcpu falló.
+                instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+            encrypted:
+              summary: PDF cifrado no soportado
+              value:
+                type: urn:papersoul:orchestrator:encrypted-pdf
+                title: El documento PDF está cifrado
+                status: 422
+                detail: Los PDFs cifrados no están soportados.
+                instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+    InternalServerError:
+      description: Error interno no mapeado.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:internal-error
+            title: Error interno del servidor
+            status: 500
+            detail: ''
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+    BadGateway:
+      description: Fallo de un microservicio downstream (Extracción o Persistencia).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            extractor-unavailable:
+              summary: Extractor no disponible
+              value:
+                type: urn:papersoul:orchestrator:extractor-unavailable
+                title: El servicio de extracción no está disponible
+                status: 502
+                detail: No se pudo contactar al microservicio de extracción.
+                instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+            persistence-unavailable:
+              summary: Persistencia no disponible
+              value:
+                type: urn:papersoul:orchestrator:persistence-unavailable
+                title: El servicio de persistencia no está disponible
+                status: 502
+                detail: No se pudo contactar al microservicio de persistencia.
+                instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+    GatewayTimeout:
+      description: Timeout de un microservicio downstream.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:downstream-timeout
+            title: Tiempo de espera agotado
+            status: 504
+            detail: El microservicio downstream no respondió a tiempo.
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+
+  schemas:
+    Problem:
+      type: object
+      description: Documento de error conforme a RFC 9457.
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          description: >-
+            URI (de referencia) que identifica el tipo de problema. Los tipos
+            propios usan el espacio urn:papersoul:orchestrator:*.
+          example: urn:papersoul:orchestrator:invalid-pdf
+        title:
+          type: string
+          description: Resumen legible del problema (no cambia entre instancias).
+          example: El documento PDF está corrupto
+        status:
+          type: integer
+          format: int32
+          description: Código de estado HTTP del problema (espejo del status de la respuesta).
+          example: 422
+        detail:
+          type: string
+          description: Detalle legible específico de esta ocurrencia.
+          example: La validación estructural con pdfcpu falló.
+        instance:
+          type: string
+          format: uri
+          description: >-
+            Referencia a la ocurrencia concreta (típicamente un UUID/trace id,
+            el X-Correlation-Id recibido o uno generado).
+          example: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+        invalid_params:
+          type: array
+          description: Extensión RFC 9457 para fallos de validación contextuales.
+          items:
+            $ref: '#/components/schemas/InvalidParam'
+    InvalidParam:
+      type: object
+      description: Fallo de validación sobre un parámetro/parte concreta.
+      required:
+        - name
+        - reason
+      properties:
+        name:
+          type: string
+          description: Nombre del parámetro. Para multipart se usa el nombre del campo y la parte.
+          example: file
+        reason:
+          type: string
+          description: Código de máquina del motivo (UPPER_SNAKE).
+          example: invalid_magic_bytes
+    ProcessDocumentResponse:
+      type: object
+      description: >-
+        Resultado del procesamiento. `status=PROCESSED` indica que se ejecutó
+        el flujo completo (extraer + persistir); `status=REUSED` indica que el
+        checksum ya existía en Persistencia y se reaprovechó sin extraer.
+      required:
+        - documentId
+        - status
+        - checksum
+      properties:
+        documentId:
+          type: string
+          format: uuid
+          description: Identificador del documento en Persistencia.
+          example: 3f2504e0-4f89-41d3-9a0c-0305e82c3301
+        status:
+          type: string
+          enum:
+            - PROCESSED
+            - REUSED
+        checksum:
+          type: string
+          description: SHA-256 hex del binario recibido (base de la deduplicación).
+          example: 5f4dcc3b5aa765d61d8327deb882cf99b2fd96a382d4c0a3f51d9c5f1d8f0a1b
+        metadata:
+          type: object
+          required:
+            - fileName
+            - sizeBytes
+            - pageCount
+            - encrypted
+          properties:
+            fileName:
+              type: string
+              example: factura.pdf
+            sizeBytes:
+              type: integer
+              format: int64
+              minimum: 0
+              example: 153600
+            pageCount:
+              type: integer
+              minimum: 1
+              example: 2
+            encrypted:
+              type: boolean
+              const: false
+              description: Siempre false: los PDFs cifrados son rechazados con 422.
