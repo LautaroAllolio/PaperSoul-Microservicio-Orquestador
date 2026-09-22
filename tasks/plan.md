@@ -12,8 +12,12 @@ validación y reenvío. Todos los errores HTTP siguen **RFC 9457** (`application
 
 ### Decisiones de contrato validadas con el usuario
 
-1. **Respuesta 200** → `documentId + status + checksum + metadata` (filenname, size, pages, encrypted).
-2. **Payload a Persistencia** → solo el JSON de extracción (más checksum/filename como metadata). El binario solo viaja cliente → orquestador → extractor.
+1. **Respuesta 200** → `documentId + status + checksum + metadata` (filename, size, pages, encrypted).
+   **Sin el texto extraído crudo** en el 200 (optimización de ancho de banda).
+2. **Payload a Persistencia** → `StoreDocumentRequest` con esquema **plano y tipado** (no
+   `json.RawMessage`) compatible con el modelo `PdfDocument` de MongoDB de PaperSoul; el
+   orquestador calcula `pdf_hash`, `text_hash` y `uploaded_at`. El binario solo viaja
+   cliente → orquestador → extractor.
 3. **Deduplicación por checksum** (no header Idempotency-Key): se calcula SHA-256 del PDF y se
    consulta a Persistencia **antes** de extraer. Si existe → `REUSED` (no se extrae, se
    reaprovecha el resultado persistido). Si no → se extrae y persiste → `PROCESSED`.
@@ -54,8 +58,9 @@ sequenceDiagram
         S->>V: ReadAndValidate(reader) [estructura + cifrado]
         V--xS: ErrPDFEncrypted / ErrPDFCorrupted → 422
         S->>E: Extract(file, checksum, filename)
-        E-->>S: domain.Extraction{json.RawMessage}
-        S->>P: Store(checksum, filename, pages, extractionJSON)
+        E-->>S: domain.ExtractResponse{text, method, pageCount}
+        S->>S: sha256(text) → text_hash; UploadedAt = now UTC
+        S->>P: Store(domain.StoreDocumentRequest)
         P--xS: conflict (race) → FindByChecksum de nuevo → REUSED
         S-->>C: 200 status=PROCESSED
     end
@@ -169,8 +174,8 @@ client  → domain, platform/errors
 package domain
 
 import (
-	"encoding/json"
 	"io"
+	"time"
 )
 
 // ProcessInput es lo que el handler entrega al orquestador.
@@ -189,7 +194,8 @@ const (
 	StatusReused    ProcessStatus = "REUSED"
 )
 
-// ProcessResult es la respuesta 200.
+// ProcessResult es la respuesta 200: documentId + status + checksum + metadata.
+// NO incluye el texto extraído crudo (ancho de banda).
 type ProcessResult struct {
 	DocumentID string
 	Status     ProcessStatus
@@ -208,26 +214,39 @@ type ExtractRequest struct {
 	Size     int64
 }
 
-// Extraction es la respuesta del Extractor. Raw es pass-through versionable;
-// el orquestador no necesita conocer el esquema, solo que sea JSON no vacío.
-type Extraction struct {
-	Raw json.RawMessage
+// ExtractResponse es la respuesta tipada del Extractor (sin pass-through genérico).
+type ExtractResponse struct {
+	ExtractedText    string `json:"extracted_text"`
+	ExtractionMethod string `json:"extraction_method"` // "pymupdf" | "ocr"
+	PageCount        int    `json:"page_count"`
 }
 
-// StoreRequest es el payload que Persistencia recibe (SOLO JSON, no el binario).
-type StoreRequest struct {
-	Checksum  string
-	FileName  string
-	PageCount int
-	Extraction json.RawMessage
+// Métodos de extracción válidos (validación en el cliente del extractor).
+const (
+	ExtractionMethodPyMuPDF = "pymupdf"
+	ExtractionMethodOCR     = "ocr"
+)
+
+// StoreDocumentRequest es el payload tipado hacia Persistencia: esquema plano
+// estricto compatible con el modelo PdfDocument de MongoDB (PaperSoul).
+// El orquestador calcula PDFHash, TextHash y UploadedAt.
+type StoreDocumentRequest struct {
+	FileName         string    `json:"filename"`
+	ExtractedText    string    `json:"extracted_text"`
+	ExtractionMethod string    `json:"extraction_method"`
+	PageCount        int       `json:"page_count"`
+	PDFHash          string    `json:"pdf_hash"`
+	TextHash         string    `json:"text_hash"`
+	UploadedAt       time.Time `json:"uploaded_at"`
 }
 
-// StoredDocument es la representación persistida (o reutilizada).
-type StoredDocument struct {
-	DocumentID string
-	Checksum   string
-	FileName   string
-	PageCount  int
+// StoredDocumentResponse es la respuesta de Persistencia (GET by-checksum y POST).
+type StoredDocumentResponse struct {
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	PDFHash   string `json:"pdf_hash"`
+	FileName  string `json:"filename"`
+	PageCount int    `json:"page_count"`
 }
 ```
 
@@ -249,14 +268,14 @@ package service
 
 // ExtractorClient es el contrato del microservicio de Extracción.
 type ExtractorClient interface {
-	Extract(ctx context.Context, in domain.ExtractRequest) (*domain.Extraction, error)
+	Extract(ctx context.Context, in domain.ExtractRequest) (*domain.ExtractResponse, error)
 }
 
 // PersistenceClient es el contrato del microservicio de Persistencia.
 // FindByChecksum retorna ErrDocumentNotFound cuando el checksum no existe.
 type PersistenceClient interface {
-	FindByChecksum(ctx context.Context, checksum string) (*domain.StoredDocument, error)
-	Store(ctx context.Context, in domain.StoreRequest) (*domain.StoredDocument, error)
+	FindByChecksum(ctx context.Context, checksum string) (*domain.StoredDocumentResponse, error)
+	Store(ctx context.Context, in domain.StoreDocumentRequest) (*domain.StoredDocumentResponse, error)
 }
 
 // PDFValidator valida estructura/cifrado con pdfcpu en memoria.
@@ -270,7 +289,7 @@ type PDFValidator interface {
 ```go
 package client
 
-func (c *extractorClient) Extract(ctx context.Context, in domain.ExtractRequest) (*domain.Extraction, error) {
+func (c *extractorClient) Extract(ctx context.Context, in domain.ExtractRequest) (*domain.ExtractResponse, error) {
 	body, totalLen, ct, err := NewMultipartPipe(in.File, in.FileName)
 	if err != nil {
 		return nil, err
@@ -295,21 +314,31 @@ func (c *extractorClient) Extract(ctx context.Context, in domain.ExtractRequest)
 	if resp.StatusCode >= 400 {
 		return nil, mapDownstreamError(errorsSvc.ErrExtractorInvalidResponse, resp) // traduce problem+json del extractor
 	}
-	var raw json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil || len(raw) == 0 {
+	var out domain.ExtractResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, errorsSvc.ErrExtractorInvalidResponse
 	}
-	return &domain.Extraction{Raw: raw}, nil
+	// Validación de esquema plano: sin pass-through genérico.
+	if out.ExtractionMethod != domain.ExtractionMethodPyMuPDF &&
+		out.ExtractionMethod != domain.ExtractionMethodOCR {
+		return nil, errorsSvc.ErrExtractorInvalidResponse
+	}
+	if out.PageCount < 1 {
+		return nil, errorsSvc.ErrExtractorInvalidResponse
+	}
+	return &out, nil
 }
 ```
 
 `internal/client/persistence.go`:
 
 ```go
-// FindByChecksum → GET /api/v1/documents/by-checksum/{checksum}
+// FindByChecksum → GET /api/v1/documents/by-checksum/{checksum}   [confirmado]
+//   200 → *domain.StoredDocumentResponse
 //   404 → ErrDocumentNotFound (sentinela, no un error de orquestador)
 //   otros no-2xx → ErrPersistenceUnavailable
-// Store → POST /api/v1/documents  (JSON: {checksum, fileName, pageCount, extraction})
+// Store → POST /api/v1/documents  (JSON plano: StoreDocumentRequest)
+//   201 → *domain.StoredDocumentResponse
 //   409 → ErrPersistenceConflict (dedup race: otro request insertó el mismo checksum)
 //   otros no-2xx → ErrPersistenceUnavailable
 ```
@@ -346,12 +375,14 @@ func (o *orchestrator) Process(ctx context.Context, in *domain.ProcessInput) (*d
 	if _, err := in.File.Seek(0, io.SeekStart); err != nil {
 		return nil, errorsSvc.ErrInternal
 	}
-	pages, err := o.validator.Validate(in.File)
-	if err != nil {
+	if _, err := o.validator.Validate(in.File); err != nil {
 		return nil, err // ErrPDFCorrupted / ErrPDFEncrypted → 422
 	}
+	// El pageCount definitivo lo reporta el extractor (ExtractResponse.PageCount);
+	// Validate es gate de guardia (estructura/cifrado), no fuente del contador.
+	// TODO(Task 6): asertar consistencia pageCount(validator) == pageCount(extractor) en tests.
 
-	extr, err := o.extractor.Extract(ctx, domain.ExtractRequest{
+	ext, err := o.extractor.Extract(ctx, domain.ExtractRequest{
 		File:     in.File, // el reader ya está al inicio tras Validate
 		FileName: in.FileName,
 		Checksum: checksum,
@@ -361,11 +392,17 @@ func (o *orchestrator) Process(ctx context.Context, in *domain.ProcessInput) (*d
 		return nil, err
 	}
 
-	stored, err = o.persistence.Store(ctx, domain.StoreRequest{
-		Checksum:   checksum,
-		FileName:   in.FileName,
-		PageCount:  pages,
-		Extraction: extr.Raw,
+	// El orquestador calcula hash del texto y la fecha de subida.
+	textHash := sha256.Sum256([]byte(ext.ExtractedText))
+
+	stored, err = o.persistence.Store(ctx, domain.StoreDocumentRequest{
+		FileName:         in.FileName,
+		ExtractedText:    ext.ExtractedText,
+		ExtractionMethod: ext.ExtractionMethod,
+		PageCount:        ext.PageCount,
+		PDFHash:          checksum,
+		TextHash:         hex.EncodeToString(textHash[:]),
+		UploadedAt:       time.Now().UTC(),
 	})
 	if err != nil {
 		if errors.Is(err, errorsSvc.ErrPersistenceConflict) {
@@ -380,6 +417,18 @@ func (o *orchestrator) Process(ctx context.Context, in *domain.ProcessInput) (*d
 	}
 
 	return resultFrom(stored, domain.StatusProcessed, checksum, in), nil
+}
+
+// resultFrom mapea StoredDocumentResponse → ProcessResult (200 sin texto crudo).
+func resultFrom(stored *domain.StoredDocumentResponse, status domain.ProcessStatus, checksum string, in *domain.ProcessInput) *domain.ProcessResult {
+	return &domain.ProcessResult{
+		DocumentID: stored.ID,
+		Status:     status,
+		Checksum:   checksum, // = stored.PDFHash (verificado en tests)
+		FileName:   stored.FileName,
+		Size:       in.Size,
+		PageCount:  stored.PageCount,
+	}
 }
 
 // checksumSHA256: seek(0) → sha256.Sum256 via io.Copy → seek(0). Reusable a lo largo del request.
@@ -534,7 +583,9 @@ req.ContentLength = totalLen
 Con `ContentLength` conocido no se usa chunked, y el `http.Client` hace backpressure
 sobre el pipe: solo se materializa en memoria lo que el socket consumió.
 
-4. **Persistencia**: body JSON `{checksum, fileName, pageCount, extraction}` (no reenvía el binario). Reusar el mismo `bytes.Reader` no aplica aquí (no se reenvía).
+4. **Persistencia**: body JSON plano `StoreDocumentRequest` (`filename`, `extracted_text`,
+   `extraction_method`, `page_count`, `pdf_hash`, `text_hash`, `uploaded_at`) — no reenvía el
+   binario. Reusar el mismo `bytes.Reader` no aplica aquí (no se reenvía).
 
 **Accounting de memoria por request (worst case):**
 `MaxFileSize (25 MiB)` + context pdfcpu (≈ tamaño del XRefTable + streams decodificados; mitigable con `conf.DecodeAllStreams=false`) + envelope multipart outbound (KB). El semáforo `MaxConcurrency` del middleware acota el total: `MaxConcurrency × (MaxFileSize + pdfcpu overhead)`.
@@ -574,7 +625,7 @@ Se lee por env en `config.Load()` con defaults seguros:
 | Variable | Default | Notas |
 |---|---|---|
 | `ORCH_ADDR` | `:8080` | bind HTTP |
-| `ORCH_MAX_FILE_SIZE` | `26214400` (25 MiB) | cap del part |
+| `ORCH_MAX_FILE_SIZE` | `26214400` (25 MiB) | cap del part — **confirmado** con negocio |
 | `ORCH_MAX_BODY_BYTES` | `MaxFileSize+65536` | cap duro del request (MaxBytesReader) |
 | `ORCH_VALIDATION_RELAXED` | `true` | `model.ValidationRelaxed` vs Strict |
 | `ORCH_MAX_CONCURRENCY` | `8` | semáforo de memoria |
@@ -591,8 +642,8 @@ Se lee por env en `config.Load()` con defaults seguros:
 - `platform/pdf`: fixtures PDF reales en `testdata/` (PDF válido pequeño — generable con el propio `pdfcpu.Create` en un test helper—, PDF corrupto, PDF cifrado vía `api.Encrypt`).
 - `platform/errors`: tabla `errors.Is` + cobertura completa de `mapper.Map`.
 - `handler`: `httptest.NewRecorder` + `chi/testutil`; casos: multipart OK, sin `file` (400), magic bytes malos (422), archivo > límite (413), body > MaxBodyBytes (413), shape exacta del `Problem`.
-- `client`: `httptest.NewServer` fake; verifica método/URL, `Content-Type` multipart + boundary, `ContentLength`, header `X-Document-Checksum`, `X-Correlation-Id` propagado, mapeo 404→ErrDocumentNotFound, 409→ErrPersistenceConflict, 5xx→ErrUnavailable, body no JSON→ErrInvalidResponse, deadline→ErrTimeout.
-- `service/orchestrator`: mocks de `ExtractorClient`/`PersistenceClient`/`PDFValidator`; casos: dedup hit (no llama al extractor, status REUSED), flujo completo (PROCESSED), corrupto/encifrado (422, no llama downstream), race de checksum (409→re-read→REUSED), fallos extractor/persistence (502/504).
+- `client`: `httptest.NewServer` fake; verifica método/URL, `Content-Type` multipart + boundary, `ContentLength`, header `X-Document-Checksum`, `X-Correlation-Id` propagado, mapeo 404→ErrDocumentNotFound, 409→ErrPersistenceConflict, 5xx→ErrUnavailable, body no JSON/esquema inválido (`extraction_method` ∉ {pymupdf,ocr}, `page_count < 1`)→ErrExtractorInvalidResponse, deadline→ErrTimeout; en `Store` el fake asevera el JSON plano de `StoreDocumentRequest` (pdf_hash/text_hash/uploaded_at presentes).
+- `service/orchestrator`: mocks de `ExtractorClient`/`PersistenceClient`/`PDFValidator`; casos: dedup hit (no llama al extractor, status REUSED), flujo completo (PROCESSED con `StoreDocumentRequest` donde `PDFHash==checksum`, `TextHash==sha256(text)`, `UploadedAt≈now UTC`), corrupto/encifrado (422, no llama downstream), race de checksum (409→re-read→REUSED), fallos extractor/persistence (502/504).
 
 **Integration tests** (build tag `//go:build integration`):
 - `httptest.NewServer` real con el router completo + fakes downstream (extractor y persistencia) también en `httptest`: valida el **end-to-end en memoria** (sin disco): subir → validar → reenviar multipart al fake extractor → persistir → 200 PROCESSED; y el caso REUSED con estado precargado.
@@ -642,20 +693,24 @@ El desglose completo con criterios de aceptación, verificación y dependencias 
 | Extractor no acepta `Content-Length` (multipart) | Bajo | `ContentLength` precalculado es estándar HTTP; fallback a chunked si el test del fake lo exige |
 | Error downstream con body problem+json propio | Bajo | `client/transport.go` traduce; nunca se re-expone el body crudo del tercero |
 | Fuga de memoria por buffer retenido | Bajo | `defer` de cierre en handler; buffer vive solo el scope del request |
-| Cambios de contrato de Persistencia (endpoints dedup) | Alto | El contrato `FindByChecksum/Store/409` se negocia con el equipo de Persistencia ANTES del Task 5 |
+| Cambios de contrato de Persistencia (endpoints dedup) | Alto | **Resuelto (Open Questions 1 y 2):** `GET /documents/by-checksum/{sha256}` + `POST /documents` con 409 confirmados; body plano `StoreDocumentRequest` tipado, sin passthrough |
 
 ## Open Questions
 
-1. **Persistencia debe exponer** `GET /documents/by-checksum/{sha256}`, `POST /documents` y
-   devolver **409** ante checksum duplicado (unicidad). ¿Ya existen o hay que negociarlos?
-   Es el prerrequisito del modelo de dedup elegido.
-2. ¿Persistencia espera el campo `extraction` como `json.RawMessage` passthrough o con un
-   esquema fijo? Determina el contrato de `StoreRequest`.
-3. ¿Auth/rate-limit entre microservicios en el deploy real? Fuera de alcance de esta fase.
-4. ¿`REUSED` debe exponer también el contenido de `extraction` persistido al cliente, o solo
-   `documentId + metadata`? El contrato actual no incluye extraction en la respuesta.
-5. ¿Límite de 25 MiB adecuado? Confirmar con negocio/casos de uso (facturas/planillas).
-6. ¿Necesidad de `pdfcpu Create` para generar el fixture "PDF válido" en tests (evitar binarios
+**Resueltas (esta iteración):**
+
+1. ✔ **Persistencia expone** `GET /api/v1/documents/by-checksum/{checksum}`, `POST /api/v1/documents`
+   y responde **409** ante checksum duplicado (unicidad). Contrato del modelo de dedup confirmado.
+2. ✔ Sin passthrough genérico: Persistencia recibe **`StoreDocumentRequest`** con esquema plano
+   estricto (compatible con `PdfDocument` de PaperSoul). `json.RawMessage` queda **descartado**.
+3. ✔ (cerrada, no aplica) La respuesta 200 es `documentId + status + checksum + metadata`, **sin**
+   el texto extraído crudo (se optimiza el ancho de banda; el texto queda en Persistencia).
+4. ✔ 25 MiB confirmado como tope máximo de subida.
+
+**Pendientes:**
+
+1. ¿Auth/rate-limit entre microservicios en el deploy real? Fuera de alcance de esta fase.
+2. ¿Necesidad de `pdfcpu Create` para generar el fixture "PDF válido" en tests (evitar binarios
    commiteados) o se commitea un fixture estático en `testdata/`?
 
 ## Verification (previo a implementar)

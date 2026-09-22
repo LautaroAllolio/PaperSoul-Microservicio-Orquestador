@@ -97,7 +97,7 @@ pueda implementarlo.
 - [ ] multipart válido → devuelve `*domain.ProcessInput{File: *bytes.Reader}` sin tocar disco
 - [ ] falta `file` → 400 problem+json con `invalid_params=[{file,required}]`
 - [ ] magic bytes ≠ `%PDF-` → 422 `invalid-pdf-header` (sin bufferizar el archivo completo)
-- [ ] part > `MaxFileSize` → 413; body > `MaxBodyBytes` → 413
+- [ ] part > `MaxFileSize` → 413; body > `MaxBodyBytes` → 413 (tope **25 MiB confirmado**)
 - [ ] el handler NO valida estructura pdfcpu (eso es del servicio); solo transporte
 
 **Verification:**
@@ -124,15 +124,17 @@ pueda implementarlo.
 
 **Description:** `internal/client`: `extractorClient.Extract` reenvía el binario en memoria con
 multipart vía `io.Pipe` + `ContentLength` precalculado y headers `X-Document-Checksum`/
-`X-Correlation-Id`; `persistenceClient.FindByChecksum`/`Store` con mapeo 404→`ErrDocumentNotFound`,
-409→`ErrPersistenceConflict`, no-2xx→`ErrUnavailable`, deadline→`ErrTimeout`. Fakes `httptest`
-para todo.
+`X-Correlation-Id`; decodifica en **`domain.ExtractResponse`** (tipado; **no** `json.RawMessage`)
+validando el esquema plano (`extraction_method` ∈ `{pymupdf, ocr}`, `page_count ≥ 1`).
+`persistenceClient.FindByChecksum` → `GET /api/v1/documents/by-checksum/{checksum}` y `Store` →
+`POST /api/v1/documents` con body **`domain.StoreDocumentRequest`**; mapeo 404→`ErrDocumentNotFound`,
+409→`ErrPersistenceConflict`, no-2xx→`ErrUnavailable`, deadline→`ErrTimeout`. Fakes `httptest` para todo.
 
 **Acceptance criteria:**
 - [ ] `Extract` produce petición multipart con boundary correcta y `ContentLength` exacto (>0), sin transfer-chunked
-- [ ] `Extract` con body no-JSON/vacío → `ErrExtractorInvalidResponse`
-- [ ] `FindByChecksum` 404 → `ErrDocumentNotFound`; 200 → `StoredDocument`
-- [ ] `Store` 409 → `ErrPersistenceConflict`; 201 → `StoredDocument`
+- [ ] `Extract` con body no-JSON/vacío **o esquema inválido** (`extraction_method` ∉ {pymupdf,ocr}, `page_count < 1`) → `ErrExtractorInvalidResponse`
+- [ ] `FindByChecksum` 404 → `ErrDocumentNotFound`; 200 → `*StoredDocumentResponse` (ID/PDFHash/FileName/PageCount)
+- [ ] `Store` envía JSON plano `StoreDocumentRequest` (con `pdf_hash`, `text_hash` y `uploaded_at`); 409 → `ErrPersistenceConflict`; 201 → `StoredDocumentResponse`
 - [ ] timeout (fake que duerme) → `ErrExtractorTimeout`/`ErrPersistenceTimeout`
 - [ ] `X-Correlation-Id` y `X-Document-Checksum` propagados en todos los calls
 
@@ -151,12 +153,14 @@ para todo.
 
 **Description:** `service.orchestrator.Process` implementa el flujo de la sección 2.4:
 checksum SHA-256 → `FindByChecksum` (hit=REUSED sin extraer) → `validator.Validate` (422) →
-`extractor.Extract` → `persistence.Store` → PROCESSED; ante 409 relee y responde REUSED.
-Con mocks (manuales) de las tres interfaces.
+`extractor.Extract` → **cálculo de `text_hash` = SHA-256(`ExtractedText`) y `UploadedAt` =
+`time.Now().UTC()`** → ensamblado de **`domain.StoreDocumentRequest`** → `persistence.Store` →
+PROCESSED; ante 409 relee y responde REUSED. Con mocks (manuales) de las tres interfaces.
 
 **Acceptance criteria:**
 - [ ] dedup hit → status `REUSED` y el mock del extractor NO se invoca
-- [ ] flujo nuevo → status `PROCESSED` con `documentId/checksum/pageCount` correctos
+- [ ] flujo nuevo → status `PROCESSED` con `documentId/checksum/pageCount` correctos y el mock de `Store` recibe `StoreDocumentRequest` con `PDFHash == checksum`, `TextHash == sha256(extracted_text)`, `UploadedAt ≈ now UTC`
+- [ ] `ExtractResponse` devuelto inválido (method desconocido / page_count < 1) → errores mapeables 502 y NO se llama a `Store`
 - [ ] `Validate` falla → 422 y no se llama a downstream
 - [ ] `Store` devuelve 409 → se relee por checksum y se responde `REUSED`
 - [ ] errores de extractor/persistence se propagan como sentinels 502/504 al mapper
