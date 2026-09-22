@@ -50,6 +50,11 @@ func newRequest(t *testing.T, withFile bool, fileContent []byte, extra map[strin
 	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
+	for name, value := range extra {
+		if err := mw.WriteField(name, value); err != nil {
+			t.Fatalf("escribiendo field %q: %v", name, err)
+		}
+	}
 	if withFile {
 		w, err := mw.CreateFormFile("file", "doc.pdf")
 		if err != nil {
@@ -57,11 +62,6 @@ func newRequest(t *testing.T, withFile bool, fileContent []byte, extra map[strin
 		}
 		if _, err := w.Write(fileContent); err != nil {
 			t.Fatalf("escribiendo file part: %v", err)
-		}
-	}
-	for name, value := range extra {
-		if err := mw.WriteField(name, value); err != nil {
-			t.Fatalf("escribiendo field %q: %v", name, err)
 		}
 	}
 	if err := mw.Close(); err != nil {
@@ -75,7 +75,7 @@ func newRequest(t *testing.T, withFile bool, fileContent []byte, extra map[strin
 
 func doRequest(t *testing.T, r *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
-	fake := &fakeService{}
+	fake := &fakeService{res: &domain.ProcessResult{DocumentID: "x", Status: domain.StatusProcessed, Checksum: "y"}}
 	h := handler.NewProcessHandler(fake, testConfig())
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, r)
