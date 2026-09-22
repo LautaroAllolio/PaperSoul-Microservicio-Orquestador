@@ -33,19 +33,14 @@ func TestValidateValidPDFReturnsPageCountAndRewinds(t *testing.T) {
 }
 
 func TestValidateCorruptPDFReturnsErrPDFCorrupted(t *testing.T) {
-	valid := validFixture(t)
-	corrupt := valid[:len(valid)/2]
-
-	_, err := pdf.New(true).Validate(bytes.NewReader(corrupt))
+	_, err := pdf.New(true).Validate(bytes.NewReader(corruptFixture(t)))
 	if !errors.Is(err, errorsvc.ErrPDFCorrupted) {
 		t.Fatalf("err = %v (%T), quiero ErrPDFCorrupted", err, err)
 	}
 }
 
 func TestValidateEncryptedPDFReturnsErrPDFEncrypted(t *testing.T) {
-	encrypted := encryptedFixture(t)
-
-	_, err := pdf.New(true).Validate(bytes.NewReader(encrypted))
+	_, err := pdf.New(true).Validate(bytes.NewReader(encryptedFixture(t)))
 	if !errors.Is(err, errorsvc.ErrPDFEncrypted) {
 		t.Fatalf("err = %v (%T), quiero ErrPDFEncrypted", err, err)
 	}
@@ -58,6 +53,12 @@ func validFixture(t *testing.T) []byte {
 		t.Fatalf("leyendo testdata/valid.pdf: %v", err)
 	}
 	return b
+}
+
+func corruptFixture(t *testing.T) []byte {
+	t.Helper()
+	header := validFixture(t)[:len("%PDF-1.4\n")]
+	return append(header, bytes.Repeat([]byte("JUNK!"), 64)...)
 }
 
 func encryptedFixture(t *testing.T) []byte {

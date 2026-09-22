@@ -710,8 +710,14 @@ El desglose completo con criterios de aceptación, verificación y dependencias 
 **Pendientes:**
 
 1. ¿Auth/rate-limit entre microservicios en el deploy real? Fuera de alcance de esta fase.
-2. ¿Necesidad de `pdfcpu Create` para generar el fixture "PDF válido" en tests (evitar binarios
-   commiteados) o se commitea un fixture estático en `testdata/`?
+
+**Resueltas (post-revisión Task 3):**
+
+2. ✔ Fixture "PDF válido": se commitea `internal/platform/pdf/testdata/valid.pdf` estático y mínimo
+   (329 bytes, xref con offsets exactos); corrupto = `%PDF-` + basura (fallo estructural determinista,
+   evita la reconstrucción de xref del modo relax) y cifrado = generado en runtime con
+   `api.Encrypt` + `model.NewAESConfiguration`. Sin `os.CreateTemp` (todo en memoria).
+   Nota: `pdfcpu v0.15.0` exige `go 1.25.0` → directiva `go` de `go.mod` pasó de `1.24` a `1.25.0`.
 
 ## Verification (previo a implementar)
 
