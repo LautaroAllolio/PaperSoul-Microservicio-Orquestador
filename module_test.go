@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	wantModule    = "github.com/papersoul/orchestrator"
-	minGoMajor    = 1
-	minGoMinor    = 24
+	wantModule = "github.com/papersoul/orchestrator"
+	minGoMajor = 1
+	minGoMinor = 24
 )
 
 func TestGoModModulePath(t *testing.T) {
