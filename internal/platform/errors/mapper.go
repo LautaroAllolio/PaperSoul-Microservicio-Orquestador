@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/papersoul/orchestrator/internal/platform/problem"
+	"github.com/papersoul/orchestrator/internal/platform/reqid"
 )
 
 type problemSpec struct {
@@ -27,6 +28,9 @@ var table = []problemSpec{
 	{ErrExtractorInvalidResponse, problem.TypeExtractorUnavailable, "El servicio de extracción devolvió una respuesta inválida", http.StatusBadGateway, nil},
 	{ErrPersistenceUnavailable, problem.TypePersistenceUnavailable, "El servicio de persistencia no está disponible", http.StatusBadGateway, nil},
 	{ErrPersistenceTimeout, problem.TypeDownstreamTimeout, "Tiempo de espera agotado", http.StatusGatewayTimeout, nil},
+	{ErrTooManyRequests, problem.TypeOverloaded, "El servicio está saturado", http.StatusServiceUnavailable, nil},
+	{ErrRouteNotFound, problem.TypeNotFound, "El recurso no existe", http.StatusNotFound, nil},
+	{ErrMethodNotAllowed, problem.TypeMethodNotAllowed, "Método no permitido", http.StatusMethodNotAllowed, nil},
 	{ErrInternal, problem.TypeInternalError, "Error interno del servidor", http.StatusInternalServerError, nil},
 }
 
@@ -50,6 +54,17 @@ func Map(r *http.Request, err error) problem.Problem {
 	}
 }
 
+// instance prefiere el contexto: el middleware genera el correlation id cuando el
+// cliente no manda ninguno, y leer solo el header dejaría "urn:uuid:" vacío justo
+// en el caso más común. Si no hay id, se omite: instance es opcional en RFC 9457
+// y un URN vacío es peor que nada.
 func instance(r *http.Request) string {
-	return "urn:uuid:" + r.Header.Get("X-Correlation-Id")
+	id := reqid.From(r.Context())
+	if id == "" {
+		id = r.Header.Get(reqid.Header)
+	}
+	if id == "" {
+		return ""
+	}
+	return "urn:uuid:" + id
 }

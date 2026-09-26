@@ -2,7 +2,10 @@ module github.com/papersoul/orchestrator
 
 go 1.25.0
 
-require github.com/pdfcpu/pdfcpu v0.15.0
+require (
+	github.com/go-chi/chi/v5 v5.3.2
+	github.com/pdfcpu/pdfcpu v0.15.0
+)
 
 require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect

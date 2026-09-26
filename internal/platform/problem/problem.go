@@ -15,6 +15,9 @@ const (
 	TypePersistenceUnavailable = "urn:papersoul:orchestrator:persistence-unavailable"
 	TypeDownstreamTimeout      = "urn:papersoul:orchestrator:downstream-timeout"
 	TypeInternalError          = "urn:papersoul:orchestrator:internal-error"
+	TypeOverloaded             = "urn:papersoul:orchestrator:overloaded"
+	TypeNotFound               = "urn:papersoul:orchestrator:not-found"
+	TypeMethodNotAllowed       = "urn:papersoul:orchestrator:method-not-allowed"
 )
 
 type Problem struct {

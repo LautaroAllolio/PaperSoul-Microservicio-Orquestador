@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/papersoul/orchestrator/internal/domain"
 	"github.com/papersoul/orchestrator/internal/handler"
 	"github.com/papersoul/orchestrator/internal/platform/config"
+	errorsvc "github.com/papersoul/orchestrator/internal/platform/errors"
 	"github.com/papersoul/orchestrator/internal/platform/problem"
 	"github.com/papersoul/orchestrator/internal/platform/reqid"
 )
@@ -102,7 +104,7 @@ func TestRouterRutaDesconocidaDevuelve404ProblemJSON(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, quiero 404", rr.Code)
 	}
-	if ct := rr.Header.Get("Content-Type"); ct != "application/problem+json" {
+	if ct := rr.Header().Get("Content-Type"); ct != "application/problem+json" {
 		t.Fatalf("Content-Type = %q, quiero application/problem+json", ct)
 	}
 	p := decodeProblem(t, rr)
@@ -121,7 +123,7 @@ func TestRouterMetodoNoPermitidoDevuelve405ConAllow(t *testing.T) {
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, quiero 405", rr.Code)
 	}
-	if ct := rr.Header.Get("Content-Type"); ct != "application/problem+json" {
+	if ct := rr.Header().Get("Content-Type"); ct != "application/problem+json" {
 		t.Fatalf("Content-Type = %q, quiero application/problem+json", ct)
 	}
 	allow := rr.Header().Get("Allow")
@@ -210,6 +212,131 @@ func TestRouterServiceQueEntraEnPanicDevuelve500SinFiltrarElStack(t *testing.T) 
 	}
 	if p.Instance != "urn:uuid:"+testCorrelationID {
 		t.Errorf("instance = %q, quiero el correlation id del request", p.Instance)
+	}
+}
+
+// TestRouterExponeTodasLasRutasDeErrorComoProblemJSON recorre la matriz de
+// errores completa a través del router: cada status sale como
+// application/problem+json, con el type correcto y el correlation id del request.
+func TestRouterExponeTodasLasRutasDeErrorComoProblemJSON(t *testing.T) {
+	desdeElServicio := []struct {
+		nombre string
+		err    error
+		status int
+		typ    string
+	}{
+		{"pdf corrupto", errorsvc.ErrPDFCorrupted, http.StatusUnprocessableEntity, problem.TypeInvalidPDF},
+		{"pdf cifrado", errorsvc.ErrPDFEncrypted, http.StatusUnprocessableEntity, problem.TypeEncryptedPDF},
+		{"extractor caído", errorsvc.ErrExtractorUnavailable, http.StatusBadGateway, problem.TypeExtractorUnavailable},
+		{"respuesta inválida del extractor", errorsvc.ErrExtractorInvalidResponse, http.StatusBadGateway, problem.TypeExtractorUnavailable},
+		{"timeout del extractor", errorsvc.ErrExtractorTimeout, http.StatusGatewayTimeout, problem.TypeDownstreamTimeout},
+		{"persistencia caída", errorsvc.ErrPersistenceUnavailable, http.StatusBadGateway, problem.TypePersistenceUnavailable},
+		{"error interno", errorsvc.ErrInternal, http.StatusInternalServerError, problem.TypeInternalError},
+		{"sentinel de control de flujo filtrado", errorsvc.ErrDocumentNotFound, http.StatusInternalServerError, problem.TypeInternalError},
+	}
+
+	for _, tc := range desdeElServicio {
+		t.Run(tc.nombre, func(t *testing.T) {
+			rr := doRouter(newTestRouter(&fakeService{err: tc.err}, testConfig()),
+				newRequest(t, true, validPdfBytes(64), nil))
+			assertProblemJSON(t, rr, tc.status, tc.typ)
+		})
+	}
+
+	// Los errores que nacen en el handler (no en el servicio) también deben salir
+	// como problem+json: el router no puede cambiarlos.
+	desdeElRequest := []struct {
+		nombre string
+		req    func() *http.Request
+		status int
+		typ    string
+	}{
+		{"sin parte file", func() *http.Request { return newRequest(t, false, nil, nil) }, http.StatusBadRequest, problem.TypeInvalidMultipart},
+		{"magic bytes inválidos", func() *http.Request { return newRequest(t, true, []byte("no soy un pdf"), nil) }, http.StatusUnprocessableEntity, problem.TypeInvalidPDFHeader},
+		{"archivo demasiado grande", func() *http.Request { return newRequest(t, true, validPdfBytes(2048), nil) }, http.StatusRequestEntityTooLarge, problem.TypeFileTooLarge},
+		{"ruta desconocida", func() *http.Request {
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/documents/inexistente", nil)
+			r.Header.Set("X-Correlation-Id", testCorrelationID)
+			return r
+		}, http.StatusNotFound, problem.TypeNotFound},
+		{"método no permitido", func() *http.Request {
+			r := httptest.NewRequest(http.MethodGet, handler.ProcessPath, nil)
+			r.Header.Set("X-Correlation-Id", testCorrelationID)
+			return r
+		}, http.StatusMethodNotAllowed, problem.TypeMethodNotAllowed},
+	}
+
+	for _, tc := range desdeElRequest {
+		t.Run(tc.nombre, func(t *testing.T) {
+			rr := doRouter(newTestRouter(okService(), testConfig()), tc.req())
+			assertProblemJSON(t, rr, tc.status, tc.typ)
+		})
+	}
+}
+
+func assertProblemJSON(t *testing.T, rr *httptest.ResponseRecorder, status int, typ string) {
+	t.Helper()
+	if rr.Code != status {
+		t.Fatalf("status = %d, quiero %d. body=%s", rr.Code, status, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, quiero application/problem+json", ct)
+	}
+	if id := rr.Header().Get("X-Correlation-Id"); id != testCorrelationID {
+		t.Errorf("X-Correlation-Id = %q, quiero que se refleje en la respuesta", id)
+	}
+	p := decodeProblem(t, rr)
+	if p.Status != status {
+		t.Errorf("problem.status = %d, quiero %d", p.Status, status)
+	}
+	if p.Type != typ {
+		t.Errorf("problem.type = %q, quiero %q", p.Type, typ)
+	}
+	if p.Instance != "urn:uuid:"+testCorrelationID {
+		t.Errorf("problem.instance = %q, quiero el correlation id del request", p.Instance)
+	}
+}
+
+func TestRouterPropagaElCorrelationIdAlContextoDelServicio(t *testing.T) {
+	// El id viaja por el contexto, no por el header: es lo que leen los clients
+	// HTTP para reenviarlo a los downstream. Si el middleware solo escribiera el
+	// header, la trazabilidad se cortaría en la primera llamada saliente.
+	var visto string
+	svc := stubService{process: func(ctx context.Context, _ *domain.ProcessInput) (*domain.ProcessResult, error) {
+		visto = reqid.From(ctx)
+		return &domain.ProcessResult{DocumentID: "doc-1", Status: domain.StatusProcessed, Checksum: "abc"}, nil
+	}}
+
+	rr := doRouter(newTestRouter(svc, testConfig()), newRequest(t, true, validPdfBytes(64), nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, quiero 200", rr.Code)
+	}
+	if visto != testCorrelationID {
+		t.Errorf("el servicio vio el id %q en el contexto, quiero %q", visto, testCorrelationID)
+	}
+}
+
+func TestRouterRegistraEl500DeUnPanicEnSuLog(t *testing.T) {
+	// El orden de la cadena lo arma NewRouter, no los tests: si el recoverer
+	// quedara por fuera del logger, el panic escaparía de la línea de log y se
+	// registraría como status=200, dejando el incidente invisible.
+	var logBuf bytes.Buffer
+	svc := stubService{process: func(_ context.Context, _ *domain.ProcessInput) (*domain.ProcessResult, error) {
+		panic("boom")
+	}}
+	h := handler.NewRouter(svc, testConfig(), loggerTo(&logBuf))
+
+	rr := doRouter(h, newRequest(t, true, validPdfBytes(64), nil))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, quiero 500", rr.Code)
+	}
+	if got := logBuf.String(); !strings.Contains(got, "status=500") {
+		t.Errorf("el log del router %q no registra el 500 del panic", got)
+	}
+	if got := logBuf.String(); !strings.Contains(got, "correlation_id="+testCorrelationID) {
+		t.Errorf("el log del router %q no correlaciona con el request", got)
 	}
 }
 

@@ -629,11 +629,14 @@ sobre el pipe: solo se materializa en memoria lo que el socket consumió.
 | `ErrPersistenceTimeout` | client (deadline) | 504 | `downstream-timeout` | Tiempo de espera agotado | — |
 | `ErrDocumentNotFound` | client Persistence (404) | **interno** — se usa de control de flujo en el orquestador, nunca se expone | — | — | — |
 | `ErrPersistenceConflict` | client Persistence (409, race) | **interno** — el orquestador relee y reusa (→200 REUSED) | — | — | — |
+| `ErrTooManyRequests` | middleware (semáforo saturado) | 503 | `overloaded` | El servicio está saturado | — |
+| `ErrRouteNotFound` | router (chi `NotFound`) | 404 | `not-found` | El recurso no existe | — |
+| `ErrMethodNotAllowed` | router (chi `MethodNotAllowed`) | 405 | `method-not-allowed` | Método no permitido | — |
 | `ErrInternal` | cualquier capa (panic/otro) | 500 | `internal-error` | Error interno del servidor | — |
 
 Reglas del mapper:
 - Toda sentinel no contemplada y todo error no sentinel ⇒ `ErrInternal` (500) sin detalle interno en `detail` (seguridad: no filtrar stack).
-- `instance` = `urn:uuid:<X-Correlation-Id>` siempre.
+- `instance` = `urn:uuid:<X-Correlation-Id>` siempre, **tomado del contexto** (`reqid.From`) y no del header: el middleware genera el id cuando el cliente no manda uno, así que leer solo el header devolvía `urn:uuid:` vacío en el caso más común. Sin id, `instance` se omite (es opcional en RFC 9457 y un URN vacío es peor que nada).
 - Los `invalid_params` se emiten con `name=file` (parte multipart) y `reason` UPPER_SNAKE.
 - `writeFail` tras headers ya enviados ⇒ el recoverer/logger lo registra, no duplica respuesta.
 
@@ -756,6 +759,32 @@ El desglose completo con criterios de aceptación, verificación y dependencias 
    `POST /api/v1/extractions` con `multipart/form-data`, parte `file` (binario) + campo `checksum`,
    además del header `X-Document-Checksum`. No hay OpenAPI del Extractor en este repo; si espera
    otro nombre de campo o el checksum solo por header, se ajusta en un commit chico.
+
+**Resueltas (post-Task 7):**
+
+8. ✔ `X-Correlation-Id` entrante se acepta **solo si es un UUID RFC 4122** (`reqid.Valid`); si no,
+   se genera uno v4 con `crypto/rand` y se devuelve ese en la respuesta. Motivo: el valor se refleja
+   en el header de respuesta y en los logs, así que aceptar cualquier cadena permitiría inyectar
+   headers (CR/LF) y ampliar líneas de log a voluntad del cliente. El valor rechazado **no se
+   loguea** (queda solo su longitud).
+9. ✔ `chi` responde 404/405 en `text/plain`; se reemplazan por handlers propios que escriben
+   `problem+json` (`ErrRouteNotFound`, `ErrMethodNotAllowed`). El `Allow` del 405 lo arma
+   `handler.rutas`, porque chi guarda la lista de métodos permitidos en un campo privado.
+10. ✔ Orden de middlewares (afuera→adentro): `RequestID → RequestLogger → Recoverer → MaxConcurrency → mux`.
+    El logger va **por fuera** del recoverer: al revés, el panic escaparía de la línea de log y se
+    registraría como `status=200`, dejando el incidente invisible. Hay un test que lo fija.
+11. ✔ El semáforo **no encola**: al saturarse responde 503 + `Retry-After: 1`. Encolar sin límite solo
+    cambia la forma del problema (el cliente igual agota su timeout) y el body en memoria crece.
+12. ✔ `http.Server` sin `WriteTimeout`: la extracción puede tardar hasta `ORCH_TIMEOUT` y un
+    `WriteTimeout` corto cortaría requests legítimos en vuelo, que es justo lo que el criterio de
+    aceptación del cierre graceful prohíbe. Se acotan `ReadHeaderTimeout` (5s, slowloris) e
+    `IdleTimeout` (60s); el tamaño del body ya lo acota `MaxBytesReader` en el handler.
+13. ✔ El cierre graceful se testea sobre `serve(ctx, srv, ln, timeout)`, el mismo código que dispara
+    `signal.NotifyContext`. No se manda un `SIGTERM` real al binario de tests (lo mataría); lo que
+    queda como check manual es `kill -TERM <pid>`.
+14. ✔ **Bug preexistente encontrado y corregido**: `api/openapi.yaml` no era YAML válido
+    (`description: Siempre false: los PDFs...` — los `:` sin quoting rompen el escalar). Nadie lo
+    había parseado. Justifica el target `lint-openapi` que ya estaba previsto para la Task 8.
 
 ## Verification (previo a implementar)
 

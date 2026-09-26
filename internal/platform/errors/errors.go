@@ -16,5 +16,8 @@ var (
 	ErrPersistenceTimeout       = errors.New("persistence timed out")
 	ErrDocumentNotFound         = errors.New("document not found")
 	ErrPersistenceConflict      = errors.New("persistence checksum conflict")
+	ErrTooManyRequests          = errors.New("service overloaded")
+	ErrRouteNotFound            = errors.New("route not found")
+	ErrMethodNotAllowed         = errors.New("method not allowed")
 	ErrInternal                 = errors.New("internal error")
 )

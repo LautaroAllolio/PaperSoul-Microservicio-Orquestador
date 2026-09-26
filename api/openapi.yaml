@@ -86,8 +86,19 @@ paths:
           $ref: '#/components/responses/InternalServerError'
         '502':
           $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '504':
           $ref: '#/components/responses/GatewayTimeout'
+        default:
+          description: >-
+            Cualquier otro error del borde, siempre como `application/problem+json`:
+            404 si el path no existe, 405 si el método no está permitido (con el
+            header `Allow`) o 500 ante un panic.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 
 components:
   parameters:
@@ -101,7 +112,9 @@ components:
       description: >-
         Identificador de trazabilidad opcional. Se refleja en el campo
         `instance` de cualquier Problem y se reenvía a los downstream
-        (Extracción y Persistencia) para correlacionar logs.
+        (Extracción y Persistencia) para correlacionar logs. Debe ser un UUID
+        (RFC 4122): si el valor recibido no lo es, el servidor descarta el que
+        envió el cliente, genera uno y devuelve ese en el header de respuesta.
 
   headers:
     CorrelationId:
@@ -224,6 +237,27 @@ components:
             status: 504
             detail: El microservicio downstream no respondió a tiempo.
             instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+    ServiceUnavailable:
+      description: >-
+        El orquestador alcanzó su límite de requests concurrentes
+        (`ORCH_MAX_CONCURRENCY`) y rechazó el request. El cliente debe reintentar
+        según el header `Retry-After`.
+      headers:
+        Retry-After:
+          description: Segundos a esperar antes de reintentar.
+          schema:
+            type: integer
+          example: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:overloaded
+            title: El servicio está saturado
+            status: 503
+            detail: ''
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
 
   schemas:
     Problem:
@@ -329,4 +363,5 @@ components:
             encrypted:
               type: boolean
               const: false
-              description: Siempre false: los PDFs cifrados son rechazados con 422.
+              description: >-
+                Siempre false: los PDFs cifrados son rechazados con 422.

@@ -92,11 +92,32 @@ func TestRequestLoggerEscribeMetodoPathStatusDuracionYCorrelationId(t *testing.T
 		"path=/api/v1/documents/process",
 		"status=418",
 		"correlation_id=" + testCorrelationID,
-		"duration=",
+		"duration_ms=",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("el log %q no contiene %q", got, want)
 		}
+	}
+}
+
+func TestRequestLoggerRegistraEl500DeUnPanic(t *testing.T) {
+	// Fija el orden de la cadena: si el recoverer estuviera por fuera del logger,
+	// el panic escaparía de la línea de log y se registraría como status=200.
+	var logBuf bytes.Buffer
+	mw := handler.RequestID(loggerTo(&logBuf))(
+		handler.RequestLogger(loggerTo(&logBuf))(
+			handler.Recoverer(loggerTo(&logBuf))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				panic("boom")
+			}))))
+
+	rr := httptest.NewRecorder()
+	mw.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/documents/process", nil))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, quiero 500", rr.Code)
+	}
+	if got := logBuf.String(); !strings.Contains(got, "status=500") {
+		t.Errorf("el log %q no registra el 500 del panic", got)
 	}
 }
 
