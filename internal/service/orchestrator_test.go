@@ -410,27 +410,43 @@ func TestStore409ReleePorChecksumYRespondeReused(t *testing.T) {
 }
 
 func TestStore409ConRelecturaFallidaPropagaElError(t *testing.T) {
-	content := pdfBytes(256)
-	f := newFixture()
-	f.extractor.res = validExtractResponse()
-	f.persistence.storeFn = func(_ int, _ domain.StoreDocumentRequest) (*domain.StoredDocumentResponse, error) {
-		return nil, errorsvc.ErrPersistenceConflict
-	}
-	f.persistence.findFn = func(call int, _ string) (*domain.StoredDocumentResponse, error) {
-		if call == 1 {
-			return nil, errorsvc.ErrDocumentNotFound
-		}
-		return nil, errorsvc.ErrPersistenceUnavailable
+	// Si la relectura falla, no hay documento que reusar: el error sube tal cual.
+	// El 404 en la relectura es anómalo (otro request healers 409 pero el documento
+	// ya no está): ErrDocumentNotFound es un sentinel interno, así que el mapper
+	// lo degrada a 500 sin filtrar nada al cliente.
+	cases := []struct {
+		nombre   string
+		secondFn error
+	}{
+		{"persistencia caído en la relectura", errorsvc.ErrPersistenceUnavailable},
+		{"documento desaparecer tras el 409", errorsvc.ErrDocumentNotFound},
 	}
 
-	res, err := f.orch.Process(context.Background(), newInput(content))
-	if !errors.Is(err, errorsvc.ErrPersistenceUnavailable) {
-		t.Fatalf("error = %v, quiero ErrPersistenceUnavailable", err)
+	for _, tc := range cases {
+		t.Run(tc.nombre, func(t *testing.T) {
+			content := pdfBytes(256)
+			f := newFixture()
+			f.extractor.res = validExtractResponse()
+			f.persistence.storeFn = func(_ int, _ domain.StoreDocumentRequest) (*domain.StoredDocumentResponse, error) {
+				return nil, errorsvc.ErrPersistenceConflict
+			}
+			f.persistence.findFn = func(call int, _ string) (*domain.StoredDocumentResponse, error) {
+				if call == 1 {
+					return nil, errorsvc.ErrDocumentNotFound
+				}
+				return nil, tc.secondFn
+			}
+
+			res, err := f.orch.Process(context.Background(), newInput(content))
+			if !errors.Is(err, tc.secondFn) {
+				t.Fatalf("error = %v, quiero %v propagado", err, tc.secondFn)
+			}
+			if res != nil {
+				t.Fatalf("result = %+v, quiero nil en error", res)
+			}
+			assertCalls(t, f, 2, 1, 1, 1)
+		})
 	}
-	if res != nil {
-		t.Fatalf("result = %+v, quiero nil en error", res)
-	}
-	assertCalls(t, f, 2, 1, 1, 1)
 }
 
 func TestErroresDeFindByChecksumNoCaenAValidar(t *testing.T) {
