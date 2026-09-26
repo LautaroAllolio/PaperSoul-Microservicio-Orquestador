@@ -67,8 +67,9 @@ func (e *Extractor) Extract(ctx context.Context, in domain.ExtractRequest) (*dom
 	if err := decodeJSON(resp, &out, errorsvc.ErrExtractorInvalidResponse); err != nil {
 		return nil, err
 	}
-	if err := validateExtractResponse(&out); err != nil {
-		return nil, err
+	// El invariante vive en domain: lo comparte el orquestador antes de persistir.
+	if err := out.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", errorsvc.ErrExtractorInvalidResponse, err)
 	}
 	return &out, nil
 }
@@ -81,18 +82,4 @@ func extractStatusSentinel(code int) error {
 		return errorsvc.ErrExtractorUnavailable
 	}
 	return errorsvc.ErrExtractorInvalidResponse
-}
-
-// validateExtractResponse valida el esquema plano de la respuesta: sin
-// pass-through genérico, un campo incoherente se traduce a 502.
-func validateExtractResponse(out *domain.ExtractResponse) error {
-	switch out.ExtractionMethod {
-	case domain.ExtractionMethodPyMuPDF, domain.ExtractionMethodOCR:
-	default:
-		return fmt.Errorf("%w: extraction_method %q", errorsvc.ErrExtractorInvalidResponse, out.ExtractionMethod)
-	}
-	if out.PageCount < 1 {
-		return fmt.Errorf("%w: page_count %d", errorsvc.ErrExtractorInvalidResponse, out.PageCount)
-	}
-	return nil
 }

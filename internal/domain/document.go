@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -54,6 +56,29 @@ const (
 	ExtractionMethodPyMuPDF = "pymupdf"
 	ExtractionMethodOCR     = "ocr"
 )
+
+// Errores de dominio al validar un ExtractResponse. No son errores HTTP: cada
+// capa los mapea a su sentinel (el client y el orquestador, ambos a
+// ErrExtractorInvalidResponse → 502).
+var (
+	ErrInvalidExtractionMethod = errors.New("extraction_method fuera del contrato")
+	ErrInvalidPageCount        = errors.New("page_count debe ser >= 1")
+)
+
+// Validate fija el invariante de una respuesta de extracción: el método tiene
+// que ser uno de los conocidos y el contador de páginas tiene que ser positivo.
+// Un texto vacío es válido: un PDF escaneado sin capa de texto no es un error.
+func (r ExtractResponse) Validate() error {
+	switch r.ExtractionMethod {
+	case ExtractionMethodPyMuPDF, ExtractionMethodOCR:
+	default:
+		return fmt.Errorf("%w: %q", ErrInvalidExtractionMethod, r.ExtractionMethod)
+	}
+	if r.PageCount < 1 {
+		return fmt.Errorf("%w: %d", ErrInvalidPageCount, r.PageCount)
+	}
+	return nil
+}
 
 // StoreDocumentRequest es el payload tipado hacia Persistencia: esquema plano
 // estricto compatible con el modelo PdfDocument de MongoDB (PaperSoul).

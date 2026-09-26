@@ -150,6 +150,7 @@ trazabilidad sin exponer stack internos.
 │       ├── config/config.go        # config por env
 │       ├── errors/errors.go        # sentinels + mapper error→Problem
 │       ├── problem/problem.go      # RFC 9457 (2.1)
+│       ├── reqid/reqid.go          # X-Correlation-Id por contexto (hoja)
 │       └── pdf/validate.go         # wrapper de pdfcpu (stream, sin disco)
 ├── api/openapi.yaml                # contrato OpenAPI 3.1 (Fase 1)
 ├── go.mod, go.sum
@@ -318,17 +319,24 @@ func (c *extractorClient) Extract(ctx context.Context, in domain.ExtractRequest)
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, errorsSvc.ErrExtractorInvalidResponse
 	}
-	// Validación de esquema plano: sin pass-through genérico.
-	if out.ExtractionMethod != domain.ExtractionMethodPyMuPDF &&
-		out.ExtractionMethod != domain.ExtractionMethodOCR {
-		return nil, errorsSvc.ErrExtractorInvalidResponse
-	}
-	if out.PageCount < 1 {
+	// Validación de esquema plano: sin pass-through genérico. El invariante vive
+	// en domain (ExtractResponse.Validate) y lo comparte el orquestador antes de
+	// persistir, para no duplicar el switch.
+	if err := out.Validate(); err != nil {
 		return nil, errorsSvc.ErrExtractorInvalidResponse
 	}
 	return &out, nil
 }
 ```
+
+> **Mapeo de status del Extractor (decidido en Task 5, se aparta del sketch de arriba).**
+> La matriz 2.6 y este snippet no coincidían. Queda fijo: error de transporte →
+> `ErrExtractorUnavailable`; **5xx** → `ErrExtractorUnavailable` (el downstream
+> está caído); **4xx** → `ErrExtractorInvalidResponse` (el extractor rechazó
+> nuestra request: incumplimiento de contrato); body no-JSON/vacío o esquema
+> inválido → `ErrExtractorInvalidResponse`. Todos terminan en 502 para el cliente
+> final, así que `api/openapi.yaml` no cambia; lo que cambia es el `errors.Is`
+> que usan los tests.
 
 `internal/client/persistence.go`:
 
@@ -380,16 +388,27 @@ func (o *orchestrator) Process(ctx context.Context, in *domain.ProcessInput) (*d
 	}
 	// El pageCount definitivo lo reporta el extractor (ExtractResponse.PageCount);
 	// Validate es gate de guardia (estructura/cifrado), no fuente del contador.
-	// TODO(Task 6): asertar consistencia pageCount(validator) == pageCount(extractor) en tests.
+	// RESUELTO en Task 6: en vez de asertar pageCount(validator) == pageCount(extractor)
+	// —con mocks ambos valores son elegidos por el test, así que la igualdad no
+	// probaría nada—, se **prohíbe** usar el del validador: el test
+	// TestElPageCountDelExtractorMandaSobreElDelValidador da 99 al validador y 7 al
+	// extractor y verifica que la respuesta y el StoreDocumentRequest usan 7.
+	// El orquestador además re-sekea a 0 antes de Extract: es el dueño del buffer y
+	// no confía en que la colaborador anterior lo haya dejado al principio.
 
 	ext, err := o.extractor.Extract(ctx, domain.ExtractRequest{
-		File:     in.File, // el reader ya está al inicio tras Validate
+		File:     in.File,
 		FileName: in.FileName,
 		Checksum: checksum,
 		Size:     in.Size,
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Defensa en profundidad: no persistimos un resultado fuera de contrato
+	// aunque el extractor lo haya devuelto.
+	if err := ext.Validate(); err != nil {
+		return nil, errorsSvc.ErrExtractorInvalidResponse
 	}
 
 	// El orquestador calcula hash del texto y la fecha de subida.
@@ -718,6 +737,25 @@ El desglose completo con criterios de aceptación, verificación y dependencias 
    evita la reconstrucción de xref del modo relax) y cifrado = generado en runtime con
    `api.Encrypt` + `model.NewAESConfiguration`. Sin `os.CreateTemp` (todo en memoria).
    Nota: `pdfcpu v0.15.0` exige `go 1.25.0` → directiva `go` de `go.mod` pasó de `1.24` a `1.25.0`.
+
+**Resueltas (post-Task 5 y 6):**
+
+3. ✔ `X-Correlation-Id` viaja por **`context.Context`** mediante la hoja
+   `platform/reqid` (`With`/`From`), no como campo de los structs de dominio: las firmas
+   fijadas en 2.3 no tienen por dónde recibirlo. El middleware de Task 7 puebla el valor
+   desde el header entrante o genera uno.
+4. ✔ Mapeo de status del Extractor: 5xx → `ErrExtractorUnavailable`, 4xx → `ErrExtractorInvalidResponse`
+   (desvía el sketch de 2.3; ver la nota en esa sección). Todos 502 para el cliente final.
+5. ✔ El invariante de `ExtractResponse` (`extraction_method` ∈ {pymupdf,ocr}, `page_count ≥ 1`)
+   vive en `domain.ExtractResponse.Validate()` y lo aplican **el client** (validación del contrato
+   de red) y **el orquestador** (no persistir incoherentes), ambos mapeando a
+   `ErrExtractorInvalidResponse`. No se duplica el switch.
+6. ✔ `TextHash` es el SHA-256 **hex** de `extracted_text` en UTF-8, calculado por el orquestador
+   (mismo algoritmo y misma representación que `pdf_hash`, para que Persistencia pueda comparar).
+7. ⚠ **Supuesto a confirmar con el equipo del microservicio de Extracción**: la request es
+   `POST /api/v1/extractions` con `multipart/form-data`, parte `file` (binario) + campo `checksum`,
+   además del header `X-Document-Checksum`. No hay OpenAPI del Extractor en este repo; si espera
+   otro nombre de campo o el checksum solo por header, se ajusta en un commit chico.
 
 ## Verification (previo a implementar)
 

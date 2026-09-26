@@ -29,6 +29,7 @@ const (
 // así el test puede verificar que el orquestador no le entrega un reader desfasado.
 type fakeExtractor struct {
 	calls int
+	pos   int64 // posición del reader justo antes de que el mock lo re-seekea
 	read  []byte
 	got   domain.ExtractRequest
 	res   *domain.ExtractResponse
@@ -39,6 +40,11 @@ func (f *fakeExtractor) Extract(_ context.Context, in domain.ExtractRequest) (*d
 	f.calls++
 	f.got = in
 	if in.File != nil {
+		pos, err := in.File.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, err
+		}
+		f.pos = pos
 		if _, err := in.File.Seek(0, io.SeekStart); err != nil {
 			return nil, err
 		}
@@ -88,6 +94,7 @@ func (f *fakePersistence) Store(_ context.Context, in domain.StoreDocumentReques
 
 type fakeValidator struct {
 	calls int
+	pos   int64 // posición del reader justo antes de que el mock lo re-seekea
 	read  []byte
 	pages int
 	err   error
@@ -96,6 +103,11 @@ type fakeValidator struct {
 func (f *fakeValidator) Validate(r io.ReadSeeker) (int, error) {
 	f.calls++
 	if r != nil {
+		pos, err := r.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		f.pos = pos
 		if _, err := r.Seek(0, io.SeekStart); err != nil {
 			return 0, err
 		}
@@ -465,6 +477,15 @@ func TestErroresDeStoreSePropagan(t *testing.T) {
 				t.Fatalf("result = %+v, quiero nil en error", res)
 			}
 			assertCalls(t, f, 1, 1, 1, 1)
+
+			// El orquestador siempre deja el reader en 0 antes de cada uso.
+			if f.validator.pos != 0 {
+				t.Fatalf("el validador recibió el reader en la posición %d, quiero 0", f.validator.pos)
+			}
+			if f.extractor.pos != 0 {
+				t.Fatalf("el extractor recibió el reader en la posición %d, quiero 0", f.extractor.pos)
+			}
+
 		})
 	}
 }
@@ -482,6 +503,10 @@ func TestElReaderSeResekeaAntesDeCadaUso(t *testing.T) {
 
 	if _, err := f.orch.Process(context.Background(), in); err != nil {
 		t.Fatalf("Process = %v, quiero nil con un reader desfasado de entrada", err)
+	}
+	if f.validator.pos != 0 || f.extractor.pos != 0 {
+		t.Fatalf("reader desfasado en las collaborators: validator.pos=%d extractor.pos=%d, quiero 0 en ambas",
+			f.validator.pos, f.extractor.pos)
 	}
 	if !bytes.Equal(f.validator.read, content) {
 		t.Fatalf("el validador recibió %d bytes, quiero el binario completo (%d)", len(f.validator.read), len(content))
