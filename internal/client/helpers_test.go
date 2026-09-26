@@ -12,27 +12,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/papersoul/orchestrator/internal/client"
 	"github.com/papersoul/orchestrator/internal/domain"
 	"github.com/papersoul/orchestrator/internal/platform/reqid"
 )
 
+// Las firmas de los clients están congeladas contra los contratos reales
+// (de service) en contract_test.go.
+
 const (
 	testCorrelationID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 	testChecksum      = "5f4dcc3b5aa765d61d8327deb882cf99b2fd96a382d4c0a3f51d9c5f1d8f0a1b"
-)
-
-// Los contracts del plan (sección 2.3) congelados como interfaces anónimas: si
-// la firma de un client cambia, el assert de abajo deja de compilar.
-var (
-	_ interface {
-		Extract(context.Context, domain.ExtractRequest) (*domain.ExtractResponse, error)
-	} = (*client.Extractor)(nil)
-
-	_ interface {
-		FindByChecksum(context.Context, string) (*domain.StoredDocumentResponse, error)
-		Store(context.Context, domain.StoreDocumentRequest) (*domain.StoredDocumentResponse, error)
-	} = (*client.Persistence)(nil)
 )
 
 // requestCapture es lo que un fake downstream observa de la petición.
