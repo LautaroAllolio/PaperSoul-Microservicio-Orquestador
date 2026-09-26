@@ -22,6 +22,9 @@ var sentinels = []error{
 	errorsvc.ErrPersistenceTimeout,
 	errorsvc.ErrDocumentNotFound,
 	errorsvc.ErrPersistenceConflict,
+	errorsvc.ErrTooManyRequests,
+	errorsvc.ErrRouteNotFound,
+	errorsvc.ErrMethodNotAllowed,
 	errorsvc.ErrInternal,
 }
 

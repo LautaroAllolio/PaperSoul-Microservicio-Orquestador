@@ -10,6 +10,7 @@ import (
 
 	errorsvc "github.com/papersoul/orchestrator/internal/platform/errors"
 	"github.com/papersoul/orchestrator/internal/platform/problem"
+	"github.com/papersoul/orchestrator/internal/platform/reqid"
 )
 
 type mapperCase struct {
@@ -34,6 +35,9 @@ func TestMapCoversErrorMatrix(t *testing.T) {
 		{"ErrExtractorInvalidResponse", errorsvc.ErrExtractorInvalidResponse, 502, problem.TypeExtractorUnavailable, "El servicio de extracción devolvió una respuesta inválida", nil},
 		{"ErrPersistenceUnavailable", errorsvc.ErrPersistenceUnavailable, 502, problem.TypePersistenceUnavailable, "El servicio de persistencia no está disponible", nil},
 		{"ErrPersistenceTimeout", errorsvc.ErrPersistenceTimeout, 504, problem.TypeDownstreamTimeout, "Tiempo de espera agotado", nil},
+		{"ErrTooManyRequests", errorsvc.ErrTooManyRequests, 503, problem.TypeOverloaded, "El servicio está saturado", nil},
+		{"ErrRouteNotFound", errorsvc.ErrRouteNotFound, 404, problem.TypeNotFound, "El recurso no existe", nil},
+		{"ErrMethodNotAllowed", errorsvc.ErrMethodNotAllowed, 405, problem.TypeMethodNotAllowed, "Método no permitido", nil},
 		{"ErrInternal", errorsvc.ErrInternal, 500, problem.TypeInternalError, "Error interno del servidor", nil},
 	}
 
@@ -100,4 +104,41 @@ func requestWithCorrelation(corr string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/documents/process", nil)
 	r.Header.Set("X-Correlation-Id", corr)
 	return r
+}
+
+func TestMapUsaElCorrelationIdDelContexto(t *testing.T) {
+	// El middleware genera el id cuando el cliente no manda ninguno, así que el
+	// contexto es la fuente autoritativa: leer solo el header dejaría instance
+	// vacío en el caso más común.
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/documents/process", nil)
+	r = r.WithContext(reqid.With(r.Context(), "8a2f9d1e-0000-0000-0000-000000000000"))
+
+	p := errorsvc.Map(r, errorsvc.ErrInternal)
+
+	want := "urn:uuid:8a2f9d1e-0000-0000-0000-000000000000"
+	if p.Instance != want {
+		t.Fatalf("instance = %q, quiero %q", p.Instance, want)
+	}
+}
+
+func TestMapPriorizaElContextoSobreElHeader(t *testing.T) {
+	r := requestWithCorrelation("del-header")
+	r = r.WithContext(reqid.With(r.Context(), "8a2f9d1e-0000-0000-0000-000000000000"))
+
+	p := errorsvc.Map(r, errorsvc.ErrInternal)
+
+	if p.Instance != "urn:uuid:8a2f9d1e-0000-0000-0000-000000000000" {
+		t.Fatalf("instance = %q, quiero el id del contexto", p.Instance)
+	}
+}
+
+func TestMapSinCorrelationIdOmiteElInstance(t *testing.T) {
+	// instance es opcional en RFC 9457: un "urn:uuid:" vacío es peor que nada.
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/documents/process", nil)
+
+	p := errorsvc.Map(r, errorsvc.ErrInternal)
+
+	if p.Instance != "" {
+		t.Fatalf("instance = %q, quiero que se omita si no hay correlation id", p.Instance)
+	}
 }
