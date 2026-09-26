@@ -27,6 +27,8 @@ func TestExtractEnviaMultipartSinChunkedYConContentLengthExacto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract = %v, quiero nil", err)
 	}
+	t.Logf("manual check ⇒ ContentLength=%d FormDataContentType()=%q TransferEncoding=%v cuerpoRecibido=%d",
+		got.ContentLength, got.ContentType, got.TransferEncoding, got.BodyLength)
 
 	if res.ExtractedText != "texto extraído" || res.ExtractionMethod != domain.ExtractionMethodPyMuPDF || res.PageCount != 7 {
 		t.Fatalf("respuesta tipada inesperada: %+v", res)
