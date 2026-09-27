@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +96,59 @@ func TestNewServerAplicaLosTimeoutsDelBorde(t *testing.T) {
 	if srv.WriteTimeout != 0 {
 		t.Errorf("WriteTimeout = %v, quiero 0 (lo acota el timeout del downstream)", srv.WriteTimeout)
 	}
+}
+
+// TestElLogDelCierreReportaElTimeoutEnMilisegundos fija la forma del log de
+// cierre. slog serializa un time.Duration como un entero de nanosegundos, así
+// que "timeout: 10000000000" hay que dividirlo a mano para saber que son 10s;
+// el log de requests ya lo reporta como duration_ms y el de arranque hacía lo
+// mismo mal.
+func TestElLogDelCierreReportaElTimeoutEnMilisegundos(t *testing.T) {
+	var registro bytes.Buffer
+	anterior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&registro, nil)))
+	t.Cleanup(func() { slog.SetDefault(anterior) })
+
+	srv := newServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	hecho := make(chan error, 1)
+	go func() { hecho <- serve(ctx, srv, ln, 2*time.Second) }()
+	cancel()
+
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Fatalf("serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve no terminó tras la cancelación")
+	}
+
+	for _, linea := range strings.Split(strings.TrimSpace(registro.String()), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(linea), &rec); err != nil {
+			continue
+		}
+		if rec["msg"] != "señal recibida, cerrando el servidor" {
+			continue
+		}
+		if _, crudos := rec["timeout"]; crudos {
+			t.Errorf(`el log trae "timeout" crudo: %v`, rec["timeout"])
+		}
+		ms, ok := rec["timeout_ms"].(float64)
+		if !ok {
+			t.Fatalf(`el log no trae "timeout_ms" numérico: %v`, rec)
+		}
+		if ms != 2000 {
+			t.Errorf("timeout_ms = %v, quiero 2000 (2s)", ms)
+		}
+		return
+	}
+	t.Fatalf("no encontré la línea de cierre en el log: %q", registro.String())
 }
 
 func TestServeEsperaLosRequestsEnVueloAntesDeCerrar(t *testing.T) {
