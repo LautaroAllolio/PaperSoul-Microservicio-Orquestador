@@ -67,7 +67,9 @@ func run(logger *slog.Logger) error {
 		"max_concurrency", cfg.MaxConcurrency,
 		"extractor", cfg.ExtractorURL,
 		"persistence", cfg.PersistenceURL,
-		"shutdown_timeout", cfg.ShutdownTimeout,
+		// En milisegundos y no como time.Duration: el handler JSON de slog
+		// serializa una duración como nanos enteros, que salen como "1e+10".
+		"shutdown_timeout_ms", milisegundos(cfg.ShutdownTimeout),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -104,7 +106,7 @@ func serve(ctx context.Context, srv *http.Server, ln net.Listener, shutdownTimeo
 	case <-ctx.Done():
 	}
 
-	slog.Default().Info("señal recibida, cerrando el servidor", "timeout", shutdownTimeout)
+	slog.Default().Info("señal recibida, cerrando el servidor", "timeout_ms", milisegundos(shutdownTimeout))
 
 	// Contexto nuevo: el que se canceló es el de la señal, no sirve para esperar.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -124,4 +126,11 @@ func normalizeServeErr(err error) error {
 		return nil
 	}
 	return fmt.Errorf("el servidor dejó de servir: %w", err)
+}
+
+// milisegundos convierte una duración al número que hay que loguear. slog
+// serializa time.Duration con su valor entero en nanosegundos, y en JSON eso
+// sale como "1e+10": legible solo para quien sabe multiplicar por 1e-9.
+func milisegundos(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
 }

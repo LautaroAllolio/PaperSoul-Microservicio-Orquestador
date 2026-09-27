@@ -3,7 +3,14 @@
 Sigue la estructura del plan en `tasks/plan.md`. Orden por dependencias (bottom-up),
 slices verticales. Cada tarea deja el repo en estado compilable.
 
-Comandos base: `make build` · `make test` · `make race` · `make vet` · `make integration`.
+Comandos base: `make build` · `make test` · `make race` · `make vet` · `make integration`
+· `make lint-openapi` · `make check-fmt` · `make ci` (todo lo anterior en orden).
+
+**Estado (Tasks 1-8 cerradas).** Las marcas `[x]` son las verificadas por la suite o
+ejecutadas a mano. Quedan `[ ]` a propósito los ítems que necesitan a una persona: las
+revisiones humanas de los checkpoints A, B y C, la aprobación del contrato OpenAPI, la
+ráfaga de 30 requests simultáneos, y los dos puntos que solo existen en CI (el pipeline
+está escrito pero el repo todavía no se pusheó, así que nunca corrió).
 
 ---
 
@@ -16,14 +23,14 @@ dependencias (`chi/v5`, `pdfcpu` última estable), el árbol de directorios `cmd
 y el `Makefile` con targets build/test/race/vet/integration.
 
 **Acceptance criteria:**
-- [ ] `go build ./...` compila sin código de negocio (main.go mínimo + paquetes vacíos)
-- [ ] Árbol de directorios exacto del plan (handler/service/client/domain/platform)
-- [ ] `Makefile` con `build/test/race/vet/integration` funcionales
+- [x] `go build ./...` compila sin código de negocio (main.go mínimo + paquetes vacíos)
+- [x] Árbol de directorios exacto del plan (handler/service/client/domain/platform)
+- [x] `Makefile` con `build/test/race/vet/integration` funcionales
 
 **Verification:**
-- [ ] Tests pass: `make test && make vet`
-- [ ] Build succeeds: `make build`
-- [ ] Manual check: `tree internal -L 2` muestra las capas
+- [x] Tests pass: `make test && make vet`
+- [x] Build succeeds: `make build`
+- [x] Manual check: `tree internal -L 2` muestra las capas
 
 **Dependencies:** None
 
@@ -39,15 +46,15 @@ defaults; `platform/problem` implementa `Problem`/`InvalidParam`/`Write` (secci�
 `platform/errors` define los sentinels del dominio + `mapper.Map` (matriz 2.6).
 
 **Acceptance criteria:**
-- [ ] `config.Load()` lee las 10 variables con defaults seguros y falla claro ante URL vacía de downstream
-- [ ] `Problem` serializa RFC 9457 exacto (campos obligatorios `type/title/status`, `omitempty` en resto)
-- [ ] Cada sentinel del dominio tiene entrada en `mapper.Map` y todo error no mapeado → `ErrInternal`(500)
-- [ ] `errors.Is` funciona para los sentinels documentados
+- [x] `config.Load()` lee las 10 variables con defaults seguros y falla claro ante URL vacía de downstream
+- [x] `Problem` serializa RFC 9457 exacto (campos obligatorios `type/title/status`, `omitempty` en resto)
+- [x] Cada sentinel del dominio tiene entrada en `mapper.Map` y todo error no mapeado → `ErrInternal`(500)
+- [x] `errors.Is` funciona para los sentinels documentados
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/platform/...`
-- [ ] Build succeeds: `make build`
-- [ ] Manual check: `invalid_params` aparece en el JSON solo cuando hay items
+- [x] Tests pass: `go test ./internal/platform/...`
+- [x] Build succeeds: `make build`
+- [x] Manual check: `invalid_params` aparece en el JSON solo cuando hay items
 
 **Dependencies:** Task 1
 
@@ -69,14 +76,14 @@ y detecta cifrado vía trailer (`ctx.XRefTable.Encrypt`). Fixtures en `testdata/
 corrupto, cifrado). **Congelar aquí el mecanismo exacto de detección de cifrado.**
 
 **Acceptance criteria:**
-- [ ] PDF válido → pageCount > 0, sin error, reader reposicionado al principio
-- [ ] PDF corrupto → `ErrPDFCorrupted` (`errors.Is`)
-- [ ] PDF cifrado → `ErrPDFEncrypted` (mecanismo congelado + test que lo fija contra la versión de go.mod)
-- [ ] No se escribe a disco: solo se usa `io.ReadSeeker` en memoria (revisión de imports: sin os.CreateTemp)
+- [x] PDF válido → pageCount > 0, sin error, reader reposicionado al principio
+- [x] PDF corrupto → `ErrPDFCorrupted` (`errors.Is`)
+- [x] PDF cifrado → `ErrPDFEncrypted` (mecanismo congelado + test que lo fija contra la versión de go.mod)
+- [x] No se escribe a disco: solo se usa `io.ReadSeeker` en memoria (revisión de imports: sin os.CreateTemp)
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/platform/pdf/...`
-- [ ] Manual check: leer un PDF cifrado real (vía `api.Encrypt`) como fixture inicial
+- [x] Tests pass: `go test ./internal/platform/pdf/...`
+- [x] Manual check: leer un PDF cifrado real (vía `api.Encrypt`) como fixture inicial
 
 **Dependencies:** Task 2
 
@@ -94,15 +101,15 @@ Contrato `handler.DocumentService` (interfaz consumidor) definido para que el or
 pueda implementarlo.
 
 **Acceptance criteria:**
-- [ ] multipart válido → devuelve `*domain.ProcessInput{File: *bytes.Reader}` sin tocar disco
-- [ ] falta `file` → 400 problem+json con `invalid_params=[{file,required}]`
-- [ ] magic bytes ≠ `%PDF-` → 422 `invalid-pdf-header` (sin bufferizar el archivo completo)
-- [ ] part > `MaxFileSize` → 413; body > `MaxBodyBytes` → 413 (tope **25 MiB confirmado**)
-- [ ] el handler NO valida estructura pdfcpu (eso es del servicio); solo transporte
+- [x] multipart válido → devuelve `*domain.ProcessInput{File: *bytes.Reader}` sin tocar disco
+- [x] falta `file` → 400 problem+json con `invalid_params=[{file,required}]`
+- [x] magic bytes ≠ `%PDF-` → 422 `invalid-pdf-header` (sin bufferizar el archivo completo)
+- [x] part > `MaxFileSize` → 413; body > `MaxBodyBytes` → 413 (tope **25 MiB confirmado**)
+- [x] el handler NO valida estructura pdfcpu (eso es del servicio); solo transporte
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/handler/...`
-- [ ] Manual check (todo a problem+json): curl con un `.png` → 422; sin campo → 400; `dd` > 25MiB → 413
+- [x] Tests pass: `go test ./internal/handler/...`
+- [x] Manual check (todo a problem+json): curl con un `.png` → 422; sin campo → 400; `dd` > 25MiB → 413
 
 **Dependencies:** Task 2
 
@@ -112,8 +119,8 @@ pueda implementarlo.
 **Estimated scope:** Medium (4-6 files)
 
 ### Checkpoint A: Validación end-to-end parcial
-- [ ] `make test && make vet` verde
-- [ ] Subir un JPG (422), un PDF de verdad (llega hasta el fake del punto siguiente) y un >25MiB (413)
+- [x] `make test && make vet` verde
+- [x] Subir un JPG (422), un PDF de verdad (llega hasta el fake del punto siguiente) y un >25MiB (413)
 - [ ] Revisión humana de la lectura `MultipartReader` en memoria (vía code review) antes de seguir
 
 ---
@@ -131,16 +138,16 @@ validando el esquema plano (`extraction_method` ∈ `{pymupdf, ocr}`, `page_coun
 409→`ErrPersistenceConflict`, no-2xx→`ErrUnavailable`, deadline→`ErrTimeout`. Fakes `httptest` para todo.
 
 **Acceptance criteria:**
-- [ ] `Extract` produce petición multipart con boundary correcta y `ContentLength` exacto (>0), sin transfer-chunked
-- [ ] `Extract` con body no-JSON/vacío **o esquema inválido** (`extraction_method` ∉ {pymupdf,ocr}, `page_count < 1`) → `ErrExtractorInvalidResponse`
-- [ ] `FindByChecksum` 404 → `ErrDocumentNotFound`; 200 → `*StoredDocumentResponse` (ID/PDFHash/FileName/PageCount)
-- [ ] `Store` envía JSON plano `StoreDocumentRequest` (con `pdf_hash`, `text_hash` y `uploaded_at`); 409 → `ErrPersistenceConflict`; 201 → `StoredDocumentResponse`
-- [ ] timeout (fake que duerme) → `ErrExtractorTimeout`/`ErrPersistenceTimeout`
-- [ ] `X-Correlation-Id` y `X-Document-Checksum` propagados en todos los calls
+- [x] `Extract` produce petición multipart con boundary correcta y `ContentLength` exacto (>0), sin transfer-chunked
+- [x] `Extract` con body no-JSON/vacío **o esquema inválido** (`extraction_method` ∉ {pymupdf,ocr}, `page_count < 1`) → `ErrExtractorInvalidResponse`
+- [x] `FindByChecksum` 404 → `ErrDocumentNotFound`; 200 → `*StoredDocumentResponse` (ID/PDFHash/FileName/PageCount)
+- [x] `Store` envía JSON plano `StoreDocumentRequest` (con `pdf_hash`, `text_hash` y `uploaded_at`); 409 → `ErrPersistenceConflict`; 201 → `StoredDocumentResponse`
+- [x] timeout (fake que duerme) → `ErrExtractorTimeout`/`ErrPersistenceTimeout`
+- [x] `X-Correlation-Id` y `X-Document-Checksum` propagados en todos los calls
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/client/...`
-- [ ] Manual check: el fake registra `R.ContentLength` y `FormDataContentType()`
+- [x] Tests pass: `go test ./internal/client/...`
+- [x] Manual check: el fake registra `R.ContentLength` y `FormDataContentType()`
 
 **Dependencies:** Task 3
 
@@ -158,17 +165,17 @@ checksum SHA-256 → `FindByChecksum` (hit=REUSED sin extraer) → `validator.Va
 PROCESSED; ante 409 relee y responde REUSED. Con mocks (manuales) de las tres interfaces.
 
 **Acceptance criteria:**
-- [ ] dedup hit → status `REUSED` y el mock del extractor NO se invoca
-- [ ] flujo nuevo → status `PROCESSED` con `documentId/checksum/pageCount` correctos y el mock de `Store` recibe `StoreDocumentRequest` con `PDFHash == checksum`, `TextHash == sha256(extracted_text)`, `UploadedAt ≈ now UTC`
-- [ ] `ExtractResponse` devuelto inválido (method desconocido / page_count < 1) → errores mapeables 502 y NO se llama a `Store`
-- [ ] `Validate` falla → 422 y no se llama a downstream
-- [ ] `Store` devuelve 409 → se relee por checksum y se responde `REUSED`
-- [ ] errores de extractor/persistence se propagan como sentinels 502/504 al mapper
-- [ ] reader siempre re-sekeado a 0 antes de cada uso (sin lecturas desfasadas)
+- [x] dedup hit → status `REUSED` y el mock del extractor NO se invoca
+- [x] flujo nuevo → status `PROCESSED` con `documentId/checksum/pageCount` correctos y el mock de `Store` recibe `StoreDocumentRequest` con `PDFHash == checksum`, `TextHash == sha256(extracted_text)`, `UploadedAt ≈ now UTC`
+- [x] `ExtractResponse` devuelto inválido (method desconocido / page_count < 1) → errores mapeables 502 y NO se llama a `Store`
+- [x] `Validate` falla → 422 y no se llama a downstream
+- [x] `Store` devuelve 409 → se relee por checksum y se responde `REUSED`
+- [x] errores de extractor/persistence se propagan como sentinels 502/504 al mapper
+- [x] reader siempre re-sekeado a 0 antes de cada uso (sin lecturas desfasadas)
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/service/...`
-- [ ] Manual check: table-driven test donde el dedup hit NO invoca el mock extractor (contador de llamadas = 0)
+- [x] Tests pass: `go test ./internal/service/...`
+- [x] Manual check: table-driven test donde el dedup hit NO invoca el mock extractor (contador de llamadas = 0)
 
 **Dependencies:** Tasks 4, 5
 
@@ -177,7 +184,7 @@ PROCESSED; ante 409 relee y responde REUSED. Con mocks (manuales) de las tres in
 **Estimated scope:** Medium (2-4 files)
 
 ### Checkpoint B: Orquestación lógica
-- [ ] `make test` verde con mocks
+- [x] `make test` verde con mocks
 - [ ] Revisión humana del flujo de dedup/race (leer orchestrator.go completo)
 
 ---
@@ -192,14 +199,14 @@ semáforo de concurrencia); `cmd/orchestrator/main.go` cablea config→clients�
 arranca con `signal.NotifyContext` y shutdown graceful.
 
 **Acceptance criteria:**
-- [ ] el servidor acepta requests y responde problem+json correctos en todas las rutas de error
-- [ ] panic → 500 problem+json (recoverer) sin filtrar stack al cliente
-- [ ] `X-Correlation-Id` recibido se preserva en la respuesta y en `instance`
-- [ ] cierre graceful: al recibir SIGTERM termina requests en vuelo y corta en `SHUTDOWN_TIMEOUT`
-- [ ] semáforo `MaxConcurrency` degrada con 503 (problem+json) cuando está saturado
+- [x] el servidor acepta requests y responde problem+json correctos en todas las rutas de error
+- [x] panic → 500 problem+json (recoverer) sin filtrar stack al cliente
+- [x] `X-Correlation-Id` recibido se preserva en la respuesta y en `instance`
+- [x] cierre graceful: al recibir SIGTERM termina requests en vuelo y corta en `SHUTDOWN_TIMEOUT`
+- [x] semáforo `MaxConcurrency` degrada con 503 (problem+json) cuando está saturado
 
 **Verification:**
-- [ ] Tests pass: `make test`
+- [x] Tests pass: `make test`
 - [ ] Manual check: `kill -TERM <pid>` no corta requests en vuelo; concatenar 30 requests simultáneos
 
 **Dependencies:** Task 6
@@ -217,15 +224,15 @@ no hay escritura a disco; se valida `api/openapi.yaml` (parseo 3.1) y se agrega 
 operación (env vars, curls de ejemplo).
 
 **Acceptance criteria:**
-- [ ] E2E PROCESSED: upload → fake extractor recibe multipart → fake persistencia recibe JSON → 200
-- [ ] E2E REUSED: estado precargado en el fake → 200 sin llamar al fake extractor
-- [ ] E2E timeout: fake extractor duerme > timeout → 504 problem+json
-- [ ] no hay llamadas a `os.CreateTemp`/S3 en paquetes de producción (escaneo en CI del tag)
-- [ ] `openapi.yaml` parsea sin error con parser OpenAPI 3.1 y responde schema `Problem` en todos los errores
+- [x] E2E PROCESSED: upload → fake extractor recibe multipart → fake persistencia recibe JSON → 200
+- [x] E2E REUSED: estado precargado en el fake → 200 sin llamar al fake extractor
+- [x] E2E timeout: fake extractor duerme > timeout → 504 problem+json
+- [x] no hay llamadas a `os.CreateTemp`/S3 en paquetes de producción (escaneo en CI del tag)
+- [x] `openapi.yaml` parsea sin error con parser OpenAPI 3.1 y responde schema `Problem` en todos los errores
 
 **Verification:**
-- [ ] Tests pass: `go test -tags=integration ./...`
-- [ ] Manual check: correr el flujo completo con los dos fakes y revisar `Content-Length` del request al extractor
+- [x] Tests pass: `go test -tags=integration ./...`
+- [x] Manual check: correr el flujo completo con los dos fakes y revisar `Content-Length` del request al extractor
 
 **Dependencies:** Task 7
 
@@ -243,8 +250,8 @@ operación (env vars, curls de ejemplo).
 
 ## Definition of Done transversal (aplica a cada Task)
 
-- [ ] Código formateado con `gofmt`, sin warnings de `go vet`
+- [x] Código formateado con `gofmt`, sin warnings de `go vet`
 - [ ] `go test ./...` verde; tests con `-race` verde en CI
-- [ ] Errores expuestos al cliente SIEMPRE bajo RFC 9457 (`application/problem+json`), nunca texto plano
-- [ ] Ninguna ruta de producción escribe a disco ni usa S3/MinIO
-- [ ] Todo error sentinel agregado tiene fila en `mapper.Map` + test de `errors.Is`
+- [x] Errores expuestos al cliente SIEMPRE bajo RFC 9457 (`application/problem+json`), nunca texto plano
+- [x] Ninguna ruta de producción escribe a disco ni usa S3/MinIO
+- [x] Todo error sentinel agregado tiene fila en `mapper.Map` + test de `errors.Is`

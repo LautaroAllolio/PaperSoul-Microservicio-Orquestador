@@ -1,0 +1,9 @@
+# El repo se edita en Windows (checkout sobre OneDrive), donde el cliente de
+# git converts los LF a CRLF al escribir y el siguiente `git status` muestra
+# como modificados archivos cuyo contenido no cambió. Normalizar en el
+# repositorio lo evita: el working tree queda siempre en LF.
+* text=auto eol=lf
+
+# Los fixtures PDF de platform/pdf/testdata son binarios: cualquier
+# normalización los corrompería (pdfcpu calcula offsets del xref).
+*.pdf binary

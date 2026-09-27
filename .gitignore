@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Binarios del servicio Go (go build -o bin/orchestrator)
+/bin/
+/orchestrator

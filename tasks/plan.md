@@ -759,9 +759,7 @@ El desglose completo con criterios de aceptación, verificación y dependencias 
    `POST /api/v1/extractions` con `multipart/form-data`, parte `file` (binario) + campo `checksum`,
    además del header `X-Document-Checksum`. No hay OpenAPI del Extractor en este repo; si espera
    otro nombre de campo o el checksum solo por header, se ajusta en un commit chico.
-
 **Resueltas (post-Task 7):**
-
 8. ✔ `X-Correlation-Id` entrante se acepta **solo si es un UUID RFC 4122** (`reqid.Valid`); si no,
    se genera uno v4 con `crypto/rand` y se devuelve ese en la respuesta. Motivo: el valor se refleja
    en el header de respuesta y en los logs, así que aceptar cualquier cadena permitiría inyectar
@@ -785,6 +783,42 @@ El desglose completo con criterios de aceptación, verificación y dependencias 
 14. ✔ **Bug preexistente encontrado y corregido**: `api/openapi.yaml` no era YAML válido
     (`description: Siempre false: los PDFs...` — los `:` sin quoting rompen el escalar). Nadie lo
     había parseado. Justifica el target `lint-openapi` que ya estaba previsto para la Task 8.
+
+**Resueltas (post-Task 8):**
+15. ✔ **El contrato se valida con un test, no con una CLI**: `api/openapi_test.go` (sin build tag,
+    corre en `make test`) parsea el yaml y fija los invariantes que importan — `openapi 3.1.0`, un
+    solo path, `file` required/binario, **la matriz 2.6 completa de status de error**, todo error
+    como `application/problem+json` con `$ref` a `Problem`, `Problem` con `type/title/status`
+    requeridos, y el `status` de cada ejemplo coincidiendo con el de su respuesta. Se descartan
+    las alternativas (`kin-openapi`, redocly vía npx) porque agregan una dependencia grande o una
+    herramienta externa por invariantes que son veinte líneas de test. `go.yaml.in/yaml/v3` queda
+    como dependencia **directa** en `go.mod` pero solo la usan tests: no entra al binario.
+16. ✔ **404 y 405 pasaron a ser responses explícitos** del contrato (`NotFound`,
+    `MethodNotAllowed` con su header `Allow`). Estaban implementados en el router y solo
+    mencionados de pasada en la descripción del `default`; el test del contrato es lo que lo
+    detectó, y el `default` quedó reducido a "lo que el router no anticipa".
+17. ✔ **El cap de tamaño se evalúa después del sniff del magic bytes**, que es el orden correcto
+    (fail-fast: no se bufferiza un archivo que no es PDF). Consecuencia práctica: un archivo
+    enorme que no empieza con `%PDF-` devuelve 422, no 413. El README documenta el curl que sí
+    produce el 413.
+18. ✔ **Los timeouts se loguean en milisegundos**: el handler JSON de `slog` serializa un
+    `time.Duration` como nanos enteros, y `"timeout": 10000000000` salía en los logs de arranque y
+    de cierre (incluso como `1e+10`). Encontrado corriendo el binario, no leyendo el código; hay
+    un test que fija la forma del log de cierre. El log de requests ya usaba `duration_ms`.
+19. ✔ La "cero escritura a disco" ahora es un **escaneo sobre el AST** (`go/ast`), no un grep: la
+    primera versión con `strings.Contains` daba dos falsos positivos que la habrían hecho inútil
+    (`CreateFormFile(` matcheaba `FormFile(`, y la palabra *dominio* matcheaba `minio`) y además
+    habría contado los comentarios que documentan la propia regla. El escaneo cubre `cmd/` e
+    `internal/`, excluye los `_test.go`, y también mira `go.mod` por si alguien suma un SDK de S3.
+20. ✔ `.gitattributes` con `* text=auto eol=lf`: el repo se edita sobre OneDrive en Windows, donde
+    el cliente de git converts a CRLF y el siguiente `git status` marcaba `.gitignore` y `LICENSE`
+    como modificados sin cambios de contenido.
+
+**Agregado al Makefile en la Task 8:** `lint-openapi` (los tests del contrato solos),
+`fmt`/`check-fmt` (gofmt como puerta, no como sugerencia) y `ci`, que corre todo en orden de
+costo creciente. `.github/workflows/ci.yml` replica esos mismos pasos.
+
+
 
 ## Verification (previo a implementar)
 

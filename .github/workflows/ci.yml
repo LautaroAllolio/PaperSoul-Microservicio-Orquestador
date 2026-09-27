@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancela la corrida anterior del mismo ref: si alguien empuja dos veces
+# seguidas, no tiene que esperar a que termine la primera.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verificar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # La versión sale de go.mod (1.25.0), que a su vez la exige pdfcpu.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Formato
+        run: make check-fmt
+
+      - name: Vet
+        run: make vet
+
+      - name: Tests
+        run: make test
+
+      - name: Tests con detector de carreras
+        run: make race
+
+      # Los E2E levantan el router real contra fakes downstream en proceso: no
+      # necesitan servicios externos ni secretos.
+      - name: Tests de integración
+        run: make integration
+
+      - name: Contrato OpenAPI
+        run: make lint-openapi

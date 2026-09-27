@@ -78,6 +78,10 @@ paths:
               $ref: '#/components/headers/CorrelationId'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
@@ -92,9 +96,9 @@ paths:
           $ref: '#/components/responses/GatewayTimeout'
         default:
           description: >-
-            Cualquier otro error del borde, siempre como `application/problem+json`:
-            404 si el path no existe, 405 si el método no está permitido (con el
-            header `Allow`) o 500 ante un panic.
+            Cualquier otro error del borde, siempre como `application/problem+json`.
+            Los casos conocidos (404 y 405 entre ellos) están declarados arriba de
+            forma explícita; este `default` cubre lo que el router no anticipa.
           content:
             application/problem+json:
               schema:
@@ -139,6 +143,41 @@ components:
             invalid_params:
               - name: file
                 reason: required
+    NotFound:
+      description: >-
+        El path no existe en el orquestador. Lo emite el `NotFound` del router y
+        no distingue mayúsculas ni METHODS inexistentes: solo hay un endpoint.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:not-found
+            title: El recurso no existe
+            status: 404
+            detail: No hay ningún recurso en esa ruta.
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
+    MethodNotAllowed:
+      description: >-
+        El path existe pero el método HTTP no está permitido. El header `Allow`
+        lista los métodos admitidos para esa ruta, que en este microservicio es
+        siempre `POST /api/v1/documents/process`.
+      headers:
+        Allow:
+          description: Métodos HTTP admitidos para el path, separados por coma.
+          schema:
+            type: string
+          example: POST
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: urn:papersoul:orchestrator:method-not-allowed
+            title: Método no permitido
+            status: 405
+            detail: Ese método no está permitido sobre este recurso.
+            instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
     PayloadTooLarge:
       description: El binario excede el límite de tamaño configurado.
       content:
