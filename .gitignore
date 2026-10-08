@@ -220,3 +220,4 @@ __marimo__/
 # Binarios del servicio Go (go build -o bin/orchestrator)
 /bin/
 /orchestrator
+tests/vegeta-generated/

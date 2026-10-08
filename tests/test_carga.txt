@@ -1,0 +1,15 @@
+POST http://localhost:8080/api/v1/documents/process
+Content-Type: multipart/form-data; boundary=papersoul-load-test-boundary
+@tests/vegeta-generated/document-01.multipart
+
+POST http://localhost:8080/api/v1/documents/process
+Content-Type: multipart/form-data; boundary=papersoul-load-test-boundary
+@tests/vegeta-generated/document-02.multipart
+
+POST http://localhost:8080/api/v1/documents/process
+Content-Type: multipart/form-data; boundary=papersoul-load-test-boundary
+@tests/vegeta-generated/document-03.multipart
+
+POST http://localhost:8080/api/v1/documents/process
+Content-Type: multipart/form-data; boundary=papersoul-load-test-boundary
+@tests/vegeta-generated/document-04.multipart

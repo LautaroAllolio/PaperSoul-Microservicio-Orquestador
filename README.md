@@ -184,3 +184,33 @@ y el escaneo que verifica que ninguna ruta de producción escribe a disco.
   (parte `file` + campo `checksum`) y el header `X-Document-Checksum`. No hay OpenAPI del
   Extractor en este repo; si espera otros nombres, se ajusta en un commit chico.
 - **Auth / rate-limit** entre microservicios en el deploy real: sin definir.
+
+## Pruebas de carga
+
+Los tests envían PDFs al endpoint `POST /api/v1/documents/process` en el campo multipart
+`file`. Ejecutar desde la raíz del repositorio, con el Orquestador y sus servicios
+downstream disponibles:
+
+```powershell
+k6 run tests/spike_tests.js
+```
+
+La URL predeterminada es `http://localhost:8080`. Para k6 puede cambiarse mediante
+`ORCH_BASE_URL`, por ejemplo:
+
+```powershell
+$env:ORCH_BASE_URL = "https://orchestrator.universidad.localhost"
+```
+
+Vegeta consume un body estático por target. Antes de cada corrida, generar los cuerpos
+multipart a partir de los PDFs del profesor:
+
+```powershell
+go run ./tests/prepare_vegeta.go
+vegeta attack -targets=tests/test_carga.txt -duration=$env:VEGETA_DURATION -rate=$env:VEGETA_RATE | vegeta report
+```
+
+Los PDFs de entrada están en `tests/stress/pdfs/`. Los cuerpos generados se guardan en
+`tests/vegeta-generated/`, carpeta ignorada por Git.
+Definir `VEGETA_DURATION` y `VEGETA_RATE` con los valores indicados por el profesor. Ambas
+herramientas ejercitan el endpoint del Orquestador.
