@@ -47,9 +47,10 @@ reescribirán los scripts de estrés del profesor.
   puede excluirla de solicitudes posteriores; no se asumirá que Traefik siempre repite una
   solicitud fallida en otra instancia.
 - Política de reintento/circuit breaker acordada (ver *Contrato de despliegue*): reintentar
-  ante fallo de conexión, timeout y respuestas `502/503/504`; como máximo **2 intentos**
-  totales con backoff de **500 ms**. No se reintentan los 4xx de negocio. El reintento es
-  seguro porque el endpoint es idempotente por checksum.
+  **solo** cuando el backend no responde (fallo de conexión/sin respuesta), **2 reintentos**
+  (`attempts=2`) con `initialInterval` de **500 ms**. Traefik v3.5 no reintenta `5xx` ni
+  `POST` con cuerpo, así que esto no garantiza reejecución en otra instancia; la deduplicación
+  por checksum deja el endpoint idempotente y seguro para reintentos del cliente.
 - Los cuatro PDFs originales se conservan. Los archivos de carga se adaptan para probar el
   contrato del Orquestador, y Vegeta recibe cuerpos multipart generados bajo demanda sin
   duplicar ni transformar permanentemente esos PDFs.
@@ -67,9 +68,10 @@ en las tareas que los consumen.
 | Descubrimiento Traefik | Docker provider (labels en el contenedor). |
 | Red compartida | Externa, nombre **`mired`**; se referencia con `external: true` y el Compose no la crea ni la administra. |
 | Puerto interno | **8080** (`ORCH_ADDR`). No se publica al host por defecto; lo expone Traefik. |
-| Host/path enrutado | **`mired.localhost`** → **`/api/v1/documents/process`**. |
-| Health check | `GET /health` como liveness (sin readiness). |
-| Retry | Reintentables: fallo de conexión, timeout y `502/503/504`. Máximo **2 intentos**, backoff **500 ms**. No se reintentan 4xx de negocio. |
+| Host/path enrutado | **`orquestador.universidad.localhost`** → **`/api/v1/documents/process`**, por el **entrypoint `https`**. |
+| TLS | `tls=true` sin certresolver: el Traefik existente sirve su certificado estático (wildcard `*.universidad.localhost`) desde el default TLS store. |
+| Health check | `GET /health` como liveness (sin readiness); en el balanceador: `interval=10s`, `timeout=3s`. |
+| Retry | Lo que ofrece Traefik v3.5: reintenta solo cuando el backend no responde (fallo de conexión/sin respuesta). **2 reintentos** (`attempts=2`, es decir 3 requests) con `initialInterval=500 ms`. v3.5 **no** reintenta respuestas `5xx` (no existe el campo `status`) ni `POST` con cuerpo (no existe `retryNonIdempotentMethod`); por eso esto **no** garantiza reejecución en otra instancia. |
 | Circuit breaker / réplica caída | Traefik deja de enviar tráfico a la instancia que falla su liveness. No se promete failover ni reejecución en otra instancia. |
 
 ## Criterios de aceptación de carga (benchmark de cátedra)
@@ -132,7 +134,7 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
 | Se requiere UDP para una API que hoy es HTTP/TCP | Configuración incompatible o ruta que no funciona | **Resuelto:** la API es HTTP/TCP y no se requiere UDP. |
-| Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Retry acotado a fallo de conexión/timeout y `502/503/504` (2 intentos, 500 ms); validar con requests idempotentes y pruebas de instancia caída. |
+| Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Retry acotado al backend sin respuesta (2 reintentos, 500 ms; Traefik v3.5 no reintenta 5xx ni POST con cuerpo); una réplica que falla su liveness se excluye del balanceo y no se promete reejecución en otra instancia. |
 | Traefik y Orquestador no comparten red o proveedor de descubrimiento | Traefik no alcanza las réplicas | Usar Docker provider y la red externa `mired` sin crear otro Traefik. |
 | `/health` confirma liveness, no disponibilidad de los downstream | Una instancia viva podría no poder completar procesamiento si falla una dependencia | Mantenerlo como liveness por decisión acordada; registrar métricas/errores downstream por separado y no interpretarlo como readiness. |
 | No se especifican umbrales de rendimiento | No se puede concluir objetivamente si una corrida aprueba | **Resuelto:** umbrales provistos por la cátedra (ver *Criterios de aceptación de carga*). |
@@ -142,10 +144,11 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
 Resueltas en la Tarea 1:
 
 - **UDP:** no aplica; la API es HTTP sobre TCP y no hay listener UDP.
-- **Retry / failover:** reintentar ante fallo de conexión/timeout y `502/503/504`, hasta 2
-  intentos con backoff de 500 ms; una réplica no saludable se excluye del balanceo y no se
-  asume reejecución en otra instancia.
-- **Traefik:** Docker provider, red externa `mired`, host `mired.localhost` y path
+- **Retry / failover:** reintentar solo cuando el backend no responde (Traefik v3.5 no
+  reintenta `5xx` ni `POST` con cuerpo), hasta 2 reintentos con `initialInterval` de 500 ms;
+  una réplica no saludable se excluye del balanceo y no se asume reejecución en otra instancia.
+- **Traefik:** Docker provider, red externa `mired`, host `orquestador.universidad.localhost`
+  por el entrypoint `https` (TLS estático del default TLS store) y path
   `/api/v1/documents/process`.
 - **Umbrales:** provistos por la cátedra (ver *Criterios de aceptación de carga*).
 

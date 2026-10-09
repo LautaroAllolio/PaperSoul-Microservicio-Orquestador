@@ -28,6 +28,37 @@ services:
       replicas: ${ORCH_REPLICAS:-2}
     networks:
       - mired
+    # Descubrimiento de las réplicas por el Docker provider de la instancia Traefik
+    # existente. Labels del servicio (shared por todas las réplicas): un único router
+    # y un único servicio con balanceo y healthcheck, por eso NO fijamos container_name.
+    # La instancia Traefik usa exposedByDefault=false en su traefik.yml: sin
+    # traefik.enable=true el contenedor quedaría invisible para el proxy.
+    labels:
+      - "traefik.enable=true"
+      # IP a usar dentro de la red compartida (Traefik vive en `mired`).
+      - "traefik.docker.network=mired"
+      # La API es HTTP/TCP (sin UDP). El router va por https: el entrypoint http
+      # (:80) del Traefik existente redirige globalmente a https.
+      - "traefik.http.routers.orchestrator.entrypoints=https"
+      # Host cubierto por el certificado estático (wildcard *.universidad.localhost)
+      # y path exacto del endpoint (así la app conserva sus 404/405/502 nativos).
+      - "traefik.http.routers.orchestrator.rule=Host(`orquestador.universidad.localhost`) && Path(`/api/v1/documents/process`)"
+      # Sin certresolver (el Traefik existente usa cert.pem/key.pem estáticos): solo
+      # se marca TLS para que el entrypoint https sirva el certificado del default TLS store.
+      - "traefik.http.routers.orchestrator.tls=true"
+      - "traefik.http.routers.orchestrator.middlewares=orchestrator-retry"
+      # Las réplicas comparten este nombre de servicio: Traefik las agrupa y balancea.
+      - "traefik.http.services.orchestrator.loadbalancer.server.port=8080"
+      # Health check del balanceador = liveness GET /health (aislado de downstream).
+      - "traefik.http.services.orchestrator.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.orchestrator.loadbalancer.healthcheck.interval=10s"
+      - "traefik.http.services.orchestrator.loadbalancer.healthcheck.timeout=3s"
+      # Retry limitado a lo que ofrece Traefik v3.5: reintenta solo cuando el backend
+      # no responde (error de conexión/sin respuesta). v3.5 NO reintenta respuestas
+      # 5xx (status) ni POST con cuerpo (retryNonIdempotentMethod); por eso esto NO
+      # es una garantía de reejecución en otra instancia.
+      - "traefik.http.middlewares.orchestrator-retry.retry.attempts=2"
+      - "traefik.http.middlewares.orchestrator-retry.retry.initialinterval=500ms"
     # Sin `ports:` (no se publica al host) y sin `container_name` (permite escalar).
 
 networks:

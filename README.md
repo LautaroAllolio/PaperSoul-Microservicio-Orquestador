@@ -125,6 +125,31 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 Persistencia necesita un MongoDB accesible: apuntar `MONGODB_URI` al mongo que ya
 esté levantado (el override no incluye mongo).
 
+## Integración con Traefik
+
+La instancia Traefik se despliega por separado —**este Compose no la inicia ni la
+modifica**— y descubre a las réplicas por el **Docker provider** leyendo los labels del
+contenedor:
+
+- **URL pública**: `https://orquestador.universidad.localhost/api/v1/documents/process`.
+- **TLS**: el router usa el entrypoint `https` con `tls=true` **sin certresolver**: sirve el
+  certificado estático del default TLS store (wildcard `*.universidad.localhost`). El
+  entrypoint `http` del Traefik existente redirige a `https`.
+- **Health check**: `GET /health` sobre el balanceador del servicio (`interval=10s`,
+  `timeout=3s`). Es liveness del proceso, no readiness ni disponibilidad de los downstream:
+  la réplica que falle queda fuera de la rotación y vuelve sola cuando recupera el liveness.
+- **Balanceo**: las réplicas comparten el nombre de servicio del balanceador
+  (`orchestrator`): Traefik las agrupa y reparte las requests entre las sanas. No hay
+  `container_name` ni puertos publicados al host.
+- **Retry**: middleware `orchestrator-retry`, `attempts=2` con `initialInterval=500ms`.
+  Limitación de Traefik v3.5: reintenta solo cuando el backend no responde (fallo de
+  conexión/sin respuesta), **no** reintenta `5xx` ni `POST` con cuerpo, así que **no** es una
+  garantía de reejecución en otra instancia. El endpoint es seguro de reintentar igual por la
+  deduplicación por checksum.
+
+Para ejercitar el endpoint publicado, las herramientas usan la URL del host (ver *Pruebas de
+carga*), por ejemplo `ORCH_BASE_URL=https://orquestador.universidad.localhost` para k6.
+
 ## Configuración
 
 Todo se lee por variables de entorno en `internal/platform/config`. Si alguna es inválida el
@@ -254,8 +279,9 @@ y el escaneo que verifica que ninguna ruta de producción escribe a disco.
 - **Liveness en `GET /health`**: responde 200 si el proceso atiende HTTP, sin consultar los
   downstream. Es liveness, no readiness: nunca debe usarse para asumir que el procesamiento
   va a funcionar.
-- **Sin reintentos automáticos** en v1: la deduplicación por checksum hace seguros los
-  reintentos del cliente.
+- **Sin reintentos automáticos en el servicio**: la deduplicación por checksum hace seguros
+  los reintentos del cliente. El retry solo lo aporta Traefik aguas arriba (ver *Integración
+  con Traefik*) y no garantiza reejecución en otra instancia.
 - **Sin autenticación** entre microservicios: fuera del alcance de esta fase.
 
 ## Pendiente de coordinar
@@ -279,7 +305,7 @@ La URL predeterminada es `http://localhost:8080`. Para k6 puede cambiarse median
 `ORCH_BASE_URL`, por ejemplo:
 
 ```powershell
-$env:ORCH_BASE_URL = "https://orchestrator.universidad.localhost"
+$env:ORCH_BASE_URL = "https://orquestador.universidad.localhost"
 ```
 
 Vegeta consume un body estático por target. Antes de cada corrida, generar los cuerpos

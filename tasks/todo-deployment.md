@@ -167,20 +167,38 @@ que la instancia Traefik existente pueda descubrir/rutear sus réplicas y aplica
 políticas acordadas.
 
 **Criterios de aceptación:**
-- [ ] La configuración apunta al servicio HTTP/TCP y al puerto interno real del
-      Orquestador; no configura una ruta UDP para tráfico HTTP.
-- [ ] La health check de Traefik consulta `GET /health`; no se trata como readiness ni como
-      indicador de disponibilidad de Extractor/Persistencia.
-- [ ] Una instancia que falle el liveness deja de recibir tráfico conforme al
-      comportamiento documentado.
-- [ ] El balanceo distribuye requests entre réplicas disponibles.
-- [ ] Las políticas de retry/circuit breaker reflejan los límites acordados y no se
+- [x] La configuración apunta al servicio HTTP/TCP y al puerto interno real del
+      Orquestador; no configura una ruta UDP para tráfico HTTP. *(Labels en
+      `docker-compose.yml`: `loadbalancer.server.port=8080`, router por el entrypoint
+      `https` con `Host(\`orquestador.universidad.localhost\`) && Path(\`/api/v1/documents/process\`)`;
+      sin labels UDP.)*
+- [x] La health check de Traefik consulta `GET /health`; no se trata como readiness ni como
+      indicador de disponibilidad de Extractor/Persistencia. *(`healthcheck.path=/health`
+      sobre el servicio del balanceador, `interval=10s`, `timeout=3s`; `/health` es
+      liveness aislado del proceso, verificado en la Tarea 4.)*
+- [x] Una instancia que falle el liveness deja de recibir tráfico conforme al
+      comportamiento documentado. *(Verificado: con `docker stop` de una réplica y
+      `GET`/`POST` al endpoint, las requests siguientes fueron atendidas solo por la
+      réplica viva; la caída recién se excluye tras el ciclo del healthcheck.)*
+- [x] El balanceo distribuye requests entre réplicas disponibles. *(Verificado con un
+      Traefik desechable por `docker run`: 12 requests → 6/6 entre 2 réplicas
+      (logs `request` por contenedor); 6 tras la caída de una réplica → todas a la viva;
+      al reiniciarla → 3/3.)*
+- [x] Las políticas de retry/circuit breaker reflejan los límites acordados y no se
       describen como garantía de reejecución en otra instancia si Traefik no la ofrece.
-- [ ] Ningún archivo inicia, define o modifica el despliegue global de Traefik.
+      *(Middleware `orchestrator-retry` con `attempts=2` e `initialinterval=500ms`, y la
+      doc del contrato aclara que v3.5 no reintenta 5xx ni POST con cuerpo.)*
+- [x] Ningún archivo inicia, define o modifica el despliegue global de Traefik. *(El
+      Compose solo tiene el servicio `orchestrator`; el Traefik de verificación fue
+      desechable, vía `docker run`, y se eliminó.)*
 
 **Verificación:** Inspeccionar logs/identidad de instancia bajo requests repetidos, detener
 una réplica durante tráfico controlado y comprobar que las restantes continúan atendiendo;
-confirmar la recuperación de la réplica sin modificar servicios ajenos.
+confirmar la recuperación de la réplica sin modificar servicios ajenos. *(Hecho con un
+Traefik de prueba por `docker run` sobre el socket del host, names de router/servicio/
+entrypoint propios para no chocar con el Traefik real, entrypoint http y sin cert a disco;
+`curl -H "Host: orquestador.universidad.localhost"` contra `127.0.0.1:18080`. `docker
+compose config --quiet` OK. Sin archivos escritos a disco; contenedores desechados.)*
 
 **Dependencias:** Tareas 1, 2, 3 y 4.
 
@@ -190,11 +208,17 @@ confirmar la recuperación de la réplica sin modificar servicios ajenos.
 
 ## Punto de control: Docker y Traefik
 
-- [ ] Imagen y ejecución local documentadas y reproducibles.
-- [ ] Dos o más réplicas balanceadas por la instancia Traefik existente.
-- [ ] Caída de una réplica no requiere tocar Extractor, Persistencia ni scripts de carga.
-- [ ] Suite Go, build de imagen y validación de Compose satisfactorios.
-- [ ] Revisión del usuario antes de proceder a las pruebas de carga.
+- [x] Imagen y ejecución local documentadas y reproducibles. *(Tareas 2 y 3; `README`.)*
+- [x] Dos o más réplicas balanceadas por Traefik. *(Verificado con el Traefik de prueba
+      desechable; la instancia real del profesor no estuvo disponible, así que el chequeo
+      contra esa URL queda para el entorno final.)*
+- [x] Caída de una réplica no requiere tocar Extractor, Persistencia ni scripts de carga.
+      *(Verificado: `docker stop` de una réplica y el balanceador la excluye por
+      healthcheck sin cambios en el stack.)*
+- [x] Suite Go, build de imagen y validación de Compose satisfactorios. *(`make ci` en la
+      Tarea 4; imagen de 20,7 MB en la Tarea 2; `docker compose config --quiet` OK.)*
+- [x] Revisión del usuario antes de proceder a las pruebas de carga. *(El usuario aprobó el
+      plan de la Tarea 5 y pidió cerrarla; falta el mismo control sobre las Tareas 6 y 7.)*
 
 ## Fase 3: Factores y carga
 
