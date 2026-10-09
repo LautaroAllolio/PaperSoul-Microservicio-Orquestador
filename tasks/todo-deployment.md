@@ -133,15 +133,25 @@ Debe responder con éxito cuando la instancia atiende HTTP y no debe consultar E
 Persistencia; la integración con Traefik se configura en la tarea siguiente.
 
 **Criterios de aceptación:**
-- [ ] `GET /health` devuelve HTTP 200 sin invocar clientes downstream.
-- [ ] El método/path quedan declarados en el router y en el contrato OpenAPI.
-- [ ] Los tests cubren la respuesta de liveness y verifican que la ruta no necesita
-      configuración ni disponibilidad de downstream.
-- [ ] El README deja de describir el health como un POST de procesamiento e indica que
-      `/health` es liveness, no readiness.
+- [x] `GET /health` devuelve HTTP 200 sin invocar clientes downstream.
+      *(`internal/handler/router.go`: handler `health` aislado; `TestHealthDevuelve200SinTocarElServicio`
+      verifica que el `DocumentService` recibe 0 llamadas.)*
+- [x] El método/path quedan declarados en el router y en el contrato OpenAPI.
+      *(`HealthPath = "/health"` con `GET` en `rutas`/`NewRouter`; path `get` con `operationId:
+      health` en `api/openapi.yaml`.)*
+- [x] Los tests cubren la respuesta de liveness y verifican que la ruta no necesita
+      configuración ni disponibilidad de downstream. *(`health_test.go`: 200 sin tocar el
+      servicio, 405 con `Allow: GET`, y 200 aun con el semáforo saturado;
+      `TestE2EHealthSobreviveALaCaidaDeLosDownstream` con los dos downstream caídos.)*
+- [x] El README deja de describir el health como un POST de procesamiento e indica que
+      `/health` es liveness, no readiness. *(Flujo, Con Docker, Configuración, Contrato y
+      Operación actualizados.)*
 
 **Verificación:** `go test ./internal/handler/...` y `go test ./api/...`; ejecutar el
 servicio con URLs downstream no disponibles y comprobar que `GET /health` responde 200.
+*(Hecho: `make ci` verde; con `EXTRACTOR_URL`/`PERSISTENCE_URL` apuntando a `http://127.0.0.1:1`
+el proceso arranca, `GET /health` → `200 {"status":"ok"}`, `POST /health` → `405 Allow: GET`
+y `POST /api/v1/documents/process` → `502`.)*
 
 **Dependencias:** Tarea 1 para la decisión de contrato; no requiere Docker ni Traefik.
 

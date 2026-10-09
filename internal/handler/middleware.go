@@ -133,10 +133,21 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 // MaxConcurrency limita los requests en vuelo. Al saturarse responde 503 con
 // Retry-After en vez de encolar: encolado sin límite solo cambia la forma del
 // problema (el cliente igual agota su propio timeout) y el body en memoria crece.
-func MaxConcurrency(limit int) func(http.Handler) http.Handler {
+//
+// Los paths en exemptPaths (p. ej. el liveness /health) no consumen slot ni se
+// rechazan: su semántica es "el proceso vive", no "hay capacidad de negocio".
+func MaxConcurrency(limit int, exemptPaths ...string) func(http.Handler) http.Handler {
+	exempt := make(map[string]struct{}, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exempt[p] = struct{}{}
+	}
 	return func(next http.Handler) http.Handler {
 		sem := make(chan struct{}, limit)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := exempt[r.URL.Path]; ok {
+				next.ServeHTTP(w, r)
+				return
+			}
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()

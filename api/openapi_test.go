@@ -22,6 +22,7 @@ import (
 const (
 	rutaContrato = "openapi.yaml"
 	pathProceso  = "/api/v1/documents/process"
+	pathHealth   = "/health"
 	refProblem   = "#/components/schemas/Problem"
 	mediaProblem = "application/problem+json"
 )
@@ -112,11 +113,29 @@ func TestElContratoExponeElEndpointDeProcesado(t *testing.T) {
 	if _, ok := paths[pathProceso]; !ok {
 		t.Fatalf("falta el path %s en el contrato (declarados: %v)", pathProceso, claves(paths))
 	}
-	if len(paths) != 1 {
-		t.Errorf("el orquestador expone un solo endpoint, el contrato declara %d: %v", len(paths), claves(paths))
+	if len(paths) != 2 {
+		t.Errorf("el orquestador expone dos endpoints (process y health), el contrato declara %d: %v", len(paths), claves(paths))
 	}
 	if op := hijoTexto(t, hijoMapa(t, hijoMapa(t, paths, pathProceso), "post"), "operationId"); op != "processDocument" {
 		t.Errorf("operationId = %q, quiero %q", op, "processDocument")
+	}
+}
+
+// TestElContratoExponeElEndpointDeLiveness fija que /health quedó declarado como
+// GET en el contrato: es el endpoint que Traefik consultará como liveness.
+func TestElContratoExponeElEndpointDeLiveness(t *testing.T) {
+	doc := cargarContrato(t)
+
+	paths := hijoMapa(t, doc, "paths")
+	if _, ok := paths[pathHealth]; !ok {
+		t.Fatalf("falta el path %s en el contrato (declarados: %v)", pathHealth, claves(paths))
+	}
+	get := hijoMapa(t, hijoMapa(t, paths, pathHealth), "get")
+	if op := hijoTexto(t, get, "operationId"); op != "health" {
+		t.Errorf("operationId = %q, quiero %q", op, "health")
+	}
+	if _, ok := hijoMapa(t, get, "responses")["200"]; !ok {
+		t.Errorf("el/los responses de /health no declaran el 200: %v", claves(hijoMapa(t, get, "responses")))
 	}
 }
 

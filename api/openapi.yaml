@@ -30,8 +30,29 @@ servers:
 
 tags:
   - name: Documents
+  - name: System
 
 paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Liveness del Orquestador
+      description: >-
+        Comprueba que el proceso HTTP está vivo y atendiendo. No consulta
+        Extracción ni Persistencia: es liveness, no readiness. Traefik lo usa
+        para decidir si la instancia sigue recibiendo tráfico.
+      operationId: health
+      responses:
+        '200':
+          description: El proceso está vivo y atiende HTTP.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
   /api/v1/documents/process:
     post:
       tags:
@@ -146,7 +167,8 @@ components:
     NotFound:
       description: >-
         El path no existe en el orquestador. Lo emite el `NotFound` del router y
-        no distingue mayúsculas ni METHODS inexistentes: solo hay un endpoint.
+        no distingue mayúsculas ni METHODS inexistentes: los endpoints son
+        `POST /api/v1/documents/process` y `GET /health`.
       content:
         application/problem+json:
           schema:
@@ -160,8 +182,8 @@ components:
     MethodNotAllowed:
       description: >-
         El path existe pero el método HTTP no está permitido. El header `Allow`
-        lista los métodos admitidos para esa ruta, que en este microservicio es
-        siempre `POST /api/v1/documents/process`.
+        lista los métodos admitidos para esa ruta: `POST` en
+        `/api/v1/documents/process` y `GET` en `/health`.
       headers:
         Allow:
           description: Métodos HTTP admitidos para el path, separados por coma.
@@ -299,6 +321,17 @@ components:
             instance: urn:uuid:8a2f9d1e-0000-0000-0000-000000000000
 
   schemas:
+    Health:
+      type: object
+      description: Estado de liveness del proceso HTTP.
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Siempre `ok` mientras el proceso atiende HTTP.
+          const: ok
+          example: ok
     Problem:
       type: object
       description: Documento de error conforme a RFC 9457.

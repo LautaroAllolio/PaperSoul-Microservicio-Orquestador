@@ -21,7 +21,8 @@ reescribirán los scripts de estrés del profesor.
 - Hay límites de tamaño y concurrencia por proceso; la deduplicación por checksum hace
   seguro repetir el procesamiento del mismo documento bajo el contrato actual.
 - El repositorio del Orquestador no contiene Dockerfile ni Compose propios.
-- Actualmente no existe un endpoint de health en el Orquestador.
+- El Orquestador expone `GET /health` como liveness (no readiness): responde 200 mientras
+  atiende HTTP y no consulta Extracción ni Persistencia.
 - El README existente describe el contrato de la API y su operación local.
 - Se encontraron `tests/spike_tests.js` (k6), `tests/test_carga.txt` (targets en formato
   Vegeta) y los cuatro PDFs en `tests/stress/pdfs/`.
@@ -39,9 +40,9 @@ reescribirán los scripts de estrés del profesor.
 - La API se publica como **HTTP sobre TCP**. Confirmado: el proceso abre un listener
   `net.Listen("tcp", ORCH_ADDR)` (`cmd/orchestrator/main.go`) y no existe ningún listener
   UDP. Traefik puede enrutar UDP, pero ese requerimiento **no aplica** al Orquestador.
-- Se agregará `GET /health` como liveness del proceso: responderá saludable cuando el
-  Orquestador esté sirviendo HTTP y no consultará Extracción ni Persistencia. No se agregará
-  readiness en esta etapa. Esta decisión está acordada; la implementación queda pendiente.
+- Se agregó `GET /health` como liveness del proceso: responde saludable cuando el
+  Orquestador está sirviendo HTTP y no consulta Extracción ni Persistencia. No se agrega
+  readiness en esta etapa (implementado en `internal/handler/router.go`).
 - Traefik usará `GET /health` para comprobar liveness. La indisponibilidad de una instancia
   puede excluirla de solicitudes posteriores; no se asumirá que Traefik siempre repite una
   solicitud fallida en otra instancia.

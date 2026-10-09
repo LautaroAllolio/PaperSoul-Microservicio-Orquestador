@@ -33,6 +33,9 @@ la deduplicación por checksum evita el doble trabajo (y Persistencia devuelve 4
 request insertó el mismo checksum primero, caso en el que el orquestador relee y responde
 `REUSED`).
 
+`GET /health` queda fuera de este flujo: es el chequeo de **liveness** del proceso y no toca
+a Extracción ni a Persistencia.
+
 ## Requisitos
 
 - Go ≥ 1.25 (la versión de `pdfcpu` usada exige esa directiva en `go.mod`).
@@ -72,6 +75,13 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 Las URLs downstream tienen que ser resolubles **desde dentro del contenedor**
 (nombres de servicio en la red de Compose, no `localhost` del host).
+
+`GET /health` responde 200 mientras el proceso atiende HTTP; sirve como liveness (lo
+consultará Traefik), no como readiness de los downstream:
+
+```bash
+curl -sS http://localhost:8080/health   # {"status":"ok"}
+```
 
 El proceso es PID 1 y ya maneja SIGTERM/SIGINT con cierre graceful, así que no
 necesita un init externo. Al detenerlo, hay que dar un margen mayor que
@@ -127,7 +137,7 @@ equivocados.
 | `ORCH_MAX_FILE_SIZE` | `26214400` (25 MiB) | Tope del archivo. Excederlo → 413. |
 | `ORCH_MAX_BODY_BYTES` | `ORCH_MAX_FILE_SIZE` + 64 KiB | Tope duro del request completo (sobre multipart). |
 | `ORCH_VALIDATION_RELAXED` | `true` | `true` = `ValidationRelaxed` de pdfcpu (tolera xrefs reconstruidas); `false` = `ValidationStrict`. |
-| `ORCH_MAX_CONCURRENCY` | `8` | Requests en vuelo. Al saturarse responde 503 + `Retry-After: 1` (no encola). |
+| `ORCH_MAX_CONCURRENCY` | `8` | Requests en vuelo sobre `/api/v1/documents/process`. Al saturarse responde 503 + `Retry-After: 1` (no encola). `/health` no compite por slot. |
 | `EXTRACTOR_URL` | — | **Requerida.** Base URL del microservicio de Extracción. |
 | `EXTRACTOR_TIMEOUT` | `30s` | Deadline de la llamada al Extractor. Vencido → 504. |
 | `PERSISTENCE_URL` | — | **Requerida.** Base URL del microservicio de Persistencia. |
@@ -153,6 +163,12 @@ pico de forma lineal.
   **No** incluye el texto extraído: ese queda en Persistencia.
 - **Errores**: siempre `application/problem+json` (`type`, `title`, `status`, y según el caso
   `detail`, `instance`, `invalid_params`).
+
+`GET /health` — **liveness** del proceso. Responde **200** `application/json` con
+`{"status":"ok"}` mientras el Orquestador atiende HTTP. **No** consulta Extracción ni
+Persistencia y **no es readiness**: una instancia puede devolver 200 y aun así fallar el
+procesamiento si un downstream está caído. Por eso no se usa para decidir reintentos. Un
+método distinto de `GET` responde 405 (tabla de abajo).
 
 | Status | `type` | Cuándo |
 |---|---|---|
@@ -235,7 +251,9 @@ y el escaneo que verifica que ninguna ruta de producción escribe a disco.
   de escritura cortaría requests legítimos.
 - **Cierre**: con SIGINT/SIGTERM deja de aceptar conexiones y espera hasta
   `ORCH_SHUTDOWN_TIMEOUT` a que terminen los requests en vuelo.
-- **Sin endpoint de health**: el chequeo de vida es un `POST` al endpoint de procesamiento.
+- **Liveness en `GET /health`**: responde 200 si el proceso atiende HTTP, sin consultar los
+  downstream. Es liveness, no readiness: nunca debe usarse para asumir que el procesamiento
+  va a funcionar.
 - **Sin reintentos automáticos** en v1: la deduplicación por checksum hace seguros los
   reintentos del cliente.
 - **Sin autenticación** entre microservicios: fuera del alcance de esta fase.

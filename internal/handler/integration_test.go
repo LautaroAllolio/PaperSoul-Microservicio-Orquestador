@@ -441,6 +441,41 @@ func TestE2EDevuelve413SiElBinarioExcedeElLimite(t *testing.T) {
 	}
 }
 
+// TestE2EHealthSobreviveALaCaidaDeLosDownstream fija que el liveness no depende
+// de Extracción ni Persistencia: con ambos caídos, /health responde 200 mientras
+// el procesamiento real devuelve 502.
+func TestE2EHealthSobreviveALaCaidaDeLosDownstream(t *testing.T) {
+	binario := leerFixture(t)
+	h := montarE2E(t, func(c *config.Config) {
+		c.ExtractorURL = "http://127.0.0.1:1"
+		c.PersistenceURL = "http://127.0.0.1:1"
+	})
+
+	res, err := http.Get(h.srv.URL + handler.HealthPath)
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer res.Body.Close()
+	cuerpo, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("leyendo /health: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /health = %d, quiero 200 con los downstream caídos (body %q)", res.StatusCode, cuerpo)
+	}
+	var got struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(cuerpo, &got); err != nil || got.Status != "ok" {
+		t.Errorf("body de /health = %q, quiero {\"status\":\"ok\"}", cuerpo)
+	}
+
+	proceso := h.subirPDF(t, nombreEnVuelo, binario, testCorrelationID)
+	if proceso.status != http.StatusBadGateway {
+		t.Fatalf("POST /process = %d, quiero 502 con los downstream caídos (body %s)", proceso.status, proceso.body)
+	}
+}
+
 // funcionesDeDisco son los métodos de os/ioutil que crean o borran archivos.
 // Se comparan por nombre exacto sobre el selector, no por substring: un grep
 // pegaría con los comentarios que documentan la regla y con la palabra

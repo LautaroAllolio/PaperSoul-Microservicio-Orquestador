@@ -12,14 +12,20 @@ import (
 	"github.com/papersoul/orchestrator/internal/platform/problem"
 )
 
-// ProcessPath es el único endpoint del orquestador.
+// ProcessPath es el endpoint de procesamiento de documentos.
 const ProcessPath = "/api/v1/documents/process"
 
-// rutas es la tabla de la API: path -> métodos admitidos. Se usa para montar el
-// mux y para completar el header Allow del 405, que chi no expone (guarda la
-// lista de métodos permitidos en un campo privado de su contexto de ruteo).
+// HealthPath es el endpoint de liveness: confirma que el proceso atiende HTTP.
+// No es readiness: no consulta Extracción ni Persistencia.
+const HealthPath = "/health"
+
+// rutas es la tabla de la API: path -> métodos admitidos. El ruteo lo declara
+// NewRouter; esta tabla se usa para completar el header Allow del 405, que chi
+// no expone (guarda la lista de métodos permitidos en un campo privado de su
+// contexto de ruteo).
 var rutas = map[string][]string{
 	ProcessPath: {http.MethodPost},
+	HealthPath:  {http.MethodGet},
 }
 
 // NewRouter arma el borde HTTP completo: ruteo, middlewares y los handlers de
@@ -49,18 +55,25 @@ func NewRouter(svc DocumentService, cfg config.Config, logger *slog.Logger) http
 		problem.Write(w, r, errorsvc.Map(r, errorsvc.ErrMethodNotAllowed))
 	})
 
-	for path, methods := range rutas {
-		for _, method := range methods {
-			mux.Method(method, path, process)
-		}
-	}
+	mux.Method(http.MethodPost, ProcessPath, process)
+	mux.Method(http.MethodGet, HealthPath, http.HandlerFunc(health))
 
 	return RequestID(logger)(
 		RequestLogger(logger)(
 			Recoverer(logger)(
-				MaxConcurrency(cfg.MaxConcurrency)(mux))))
+				MaxConcurrency(cfg.MaxConcurrency, HealthPath)(mux))))
 }
 
 func allowFor(path string) string {
 	return strings.Join(rutas[path], ", ")
+}
+
+// health responde 200 mientras el proceso atiende HTTP. No toca los downstream
+// ni la configuración: es liveness del Orquestador, no readiness de sus
+// dependencias. Queda fuera de MaxConcurrency para que una instancia saturada
+// siga declarándose viva.
+func health(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
