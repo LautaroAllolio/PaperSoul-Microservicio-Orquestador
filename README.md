@@ -320,3 +320,34 @@ Los PDFs de entrada están en `tests/stress/pdfs/`. Los cuerpos generados se gua
 `tests/vegeta-generated/`, carpeta ignorada por Git.
 Definir `VEGETA_DURATION` y `VEGETA_RATE` con los valores indicados por el profesor. Ambas
 herramientas ejercitan el endpoint del Orquestador.
+
+## Cumplimiento de los 12 factores
+
+Matriz verificada contra el código, la imagen, el Compose y la configuración de runtime del
+Orquestador. "Evidencia" apunta al archivo/línea que la sostiene; las brechas se registran al
+final, sin ocultar lo que no está resuelto.
+
+| # | Factor | Cumplimiento | Evidencia verificable |
+|---|---|---|---|
+| 1 | Codebase (una base de código) | Una base por microservicio. Todos los cambios de despliegue son del repo Orquestador; el Compose referencia imágenes y no modifica repos ajenos (el override local solo agrega downstream ya construidos). | Repo git; `docker-compose.yml` (sin `build:`); `docker-compose.dev.yml` (referencia imágenes de `../PaperSoul-*`). |
+| 2 | Dependencias (declaradas y aisladas) | Declaradas en `go.mod`/`go.sum`; se descargan solo en la etapa builder como capa cacheada; el runtime distroless lleva únicamente el binario, sin gestor de paquetes ni herramientas. CI resuelve Go desde `go.mod`. | `go.mod`; `Dockerfile:10-12` (`go mod download`), `Dockerfile:26` (distroless); `.github/workflows/ci.yml` (`go-version-file: go.mod`). |
+| 3 | Config (en el entorno) | Toda la configuración operativa por variables de entorno (`internal/platform/config/config.go`). Fallo rápido si falta/inválida (`errors.Join`). `.env` no se versiona; la imagen solo fija `ORCH_ADDR`; no hay secretos embebidos. Compose exige las URLs con `${VAR:?}`. | `internal/platform/config/config.go`; `Dockerfile:32`; `.gitignore:151` (`.env`); `.env.example`; `docker-compose.yml:20,22`. |
+| 4 | Backing services (recursos adheridos) | Extracción y Persistencia se tratan como servicios conectables por URL (`EXTRACTOR_URL`/`PERSISTENCE_URL`), sin distinguir local de remoto. La red `mired` es externa y Traefik se despliega aparte. Mongo queda dentro del repo de Persistencia (ajeno, no verificado aquí). | `cmd/orchestrator/main.go:51-53` (clientes con `BaseURL` de cfg); `docker-compose.yml:64-69` (red `external: true`). |
+| 5 | Build, release, run | Build reproducible por `Dockerfile` multi-stage; release = imagen referenciada por `ORCH_IMAGE` en Compose (separada del `run`); run = contenedor con configuración por entorno. | `Dockerfile`; `docker-compose.yml:13` (`image: ${ORCH_IMAGE:-...}`). *Brecha: ver abajo.* |
+| 6 | Processes (sin estado) | Proceso sin estado: cada request es dueño de su buffer y no hay estado compartido durable. **Cero almacenamiento intermedio** es un criterio arquitectónico garantizado por escaneo estático (go/ast sobre rutas de producción: sin `os.Create`/`CreateTemp`/`WriteFile`/`OpenFile`/`Remove*` ni SDKs de S3/MinIO). Corre con filesystem `--read-only`. | `internal/service/orchestrator.go:33-39` (doc "No tiene estado"); `internal/handler/process.go:48` (multipart en streaming, no vuelca a disco); `TestE2ENuncaEscribeADisco` en `internal/handler/integration_test.go:512`. |
+| 7 | Port binding | Escucha en `ORCH_ADDR` (default `:8080`) con `net.Listen("tcp", ...)`; `EXPOSE 8080`; el puerto no se publica al host por defecto (lo expone Traefik). | `cmd/orchestrator/main.go:60`; `Dockerfile:34`; `docker-compose.yml` (sin `ports:`). |
+| 8 | Concurrency (escalado por procesos) | Escala por réplicas independientes que comparten servicio en Traefik. Por proceso, `ORCH_MAX_CONCURRENCY` (default 8) limita requests en vuelo con un semáforo: al saturarse responde `503` + `Retry-After: 1`, sin encolar; `/health` queda exento. | `internal/handler/middleware.go:139-161`; `docker-compose.yml:27-28` (`deploy.replicas`). |
+| 9 | Disposability | Arranque rápido (binario estático, no descarga nada en runtime). SIGTERM/SIGINT → deja de aceptar y `srv.Shutdown` espera hasta `ORCH_SHUTDOWN_TIMEOUT`; el `stop_grace_period` del contenedor supera ese timeout. Sin estado, una caída no requiere recuperación. | `cmd/orchestrator/main.go:99-122`; `docker-compose.yml:26` (`stop_grace_period`); verificación de la Tarea 2 (`docker stop -t 15` con `ORCH_SHUTDOWN_TIMEOUT=10s`). |
+| 10 | Dev/prod parity | Misma imagen y configuración en local y en el deploy; el override local referencia las **mismas imágenes** (sin `build:`). La única divergencia documentada es que el override agrega los downstream y Mongo locales, que en prod provee el stack de Traefik. | `docker-compose.yml` + `docker-compose.dev.yml` (layering de Compose). |
+| 11 | Logs (flujo de eventos a stdout) | JSON a stdout (`slog.NewJSONHandler(os.Stdout)`): una línea por request con método, path, status, bytes, `duration_ms` y `correlation_id`; los panic loguean el stack al log, nunca al cliente; nada se escribe a archivos. | `cmd/orchestrator/main.go:36`; `internal/handler/middleware.go:81-99` (RequestLogger), `:106-131` (Recoverer); verificación de la Tarea 2 (logs JSON a stdout). |
+| 12 | Admin processes | No hay tareas administrativas (migraciones, mantenimiento, cron) hoy; se documenta su ausencia. Cualquier tarea admin futura debe ejecutarse con el mismo artefacto y configuración. | No existe comando/módulo admin en `cmd/`; ausencia documentada en el plan de despliegue. |
+
+### Brechas y pendientes
+
+- **CI no construye ni publica la imagen**: `.github/workflows/ci.yml` corre solo el toolchain
+  Go (`make ci`); el `docker build` y el versionado de la imagen (tag/registry) quedan fuera del
+  pipeline. Recomendación: separar un job de build + push por tag semántico.
+- **Validación final contra el Traefik real**: el balanceo/healthcheck se verificó con un Traefik
+  desechable; falta confirmarlo contra la instancia del profesor (`orquestador.universidad.localhost`).
+- **Fronteras ajenas no verificadas aquí**: el contrato del Extractor con `X-Document-Checksum` y el
+  MongoDB de Persistencia son de otros repos (ver *Pendiente de coordinar*).

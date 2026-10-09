@@ -123,6 +123,9 @@ ya versionados coinciden con los del enunciado.
 | 11. Logs | Los logs JSON continúan en stdout/stderr para que Docker y el stack externo los recolecten. |
 | 12. Admin processes | No hay tareas administrativas actuales; documentar esa ausencia y, si aparece una, ejecutarla con el mismo artefacto y configuración. |
 
+> **Matriz definitiva y evidencia verificada** (con archivo/línea por factor y brechas
+> registradas): ver en `README.md` → *Cumplimiento de los 12 factores*.
+
 ## Tareas propuestas
 
 Ver el orden, los criterios de aceptación y las verificaciones en

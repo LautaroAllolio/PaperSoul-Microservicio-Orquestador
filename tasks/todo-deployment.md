@@ -229,15 +229,26 @@ factores basada en el comportamiento real del servicio, indicando cumplimiento, 
 y cualquier límite o factor no aplicable.
 
 **Criterios de aceptación:**
-- [ ] Los 12 factores están documentados explícitamente, con evidencia verificable y no
-      afirmaciones genéricas.
-- [ ] Se cubren configuración, servicios externos, build/release/run, procesos sin estado,
+- [x] Los 12 factores están documentados explícitamente, con evidencia verificable y no
+      afirmaciones genéricas. *(Matriz en `README.md` → *Cumplimiento de los 12 factores*:
+      cada fila cita el archivo/línea que la sostiene, p. ej. `config.go`, `Dockerfile`,
+      `main.go`, `middleware.go`, `TestE2ENuncaEscribeADisco`, `ci.yml`.)*
+- [x] Se cubren configuración, servicios externos, build/release/run, procesos sin estado,
       binding de puerto, concurrencia, disposability, paridad, logs y tareas administrativas.
-- [ ] Se documentan también los factores que no requieren cambios y cualquier brecha
-      pendiente, sin alterar servicios ajenos.
+      *(Factores 3-12 en la matriz; los de "sin cambios" (1, 2, 12) también quedan
+      documentados con su evidencia.)*
+- [x] Se documentan también los factores que no requieren cambios y cualquier brecha
+      pendiente, sin alterar servicios ajenos. *(Subsección *Brechas y pendientes*:
+      CI sin `docker build`/release de la imagen, validación contra el Traefik real del
+      profesor pendiente, y fronteras ajenas (contrato del Extractor y MongoDB de
+      Persistencia) marcadas como fuera de este repo. Solo se tocó el repo del Orquestador.)*
 
 **Verificación:** Revisar cada factor contra la imagen, Compose, aplicación y configuración
-de runtime; resolver las brechas o registrarlas como pendientes.
+de runtime; resolver las brechas o registrarlas como pendientes. *(Relevadas contra el
+Dockerfile, `cmd/orchestrator/main.go`, `internal/platform/config`, `internal/service`,
+`internal/handler/middleware.go`, el escaneo estático en `integration_test.go`, `ci.yml`,
+`.env.example`, `.gitignore` y ambos Compose. Brechas registradas como pendientes, sin
+cambios de código.)*
 
 **Dependencias:** Tareas 2, 3 y 4.
 
@@ -293,10 +304,13 @@ Los PDFs originales permanecen intactos.
 
 ## Punto de control final
 
-- [ ] Solo hay cambios dentro del repositorio del Orquestador.
-- [ ] La suite y build Go existentes siguen pasando.
-- [ ] La imagen y el Compose del Orquestador funcionan sin iniciar Traefik desde ese stack.
-- [ ] Los 12 factores están comprobados/documentados.
-- [ ] k6 y Vegeta cumplen los umbrales acordados o las brechas están informadas.
+- [x] Solo hay cambios dentro del repositorio del Orquestador. *(Hasta la Tarea 6 inclusive.)*
+- [x] La suite y build Go existentes siguen pasando. *(`make ci` verde en la Tarea 4; los
+      cambios de la Tarea 6 son solo documentación.)*
+- [x] La imagen y el Compose del Orquestador funcionan sin iniciar Traefik desde ese stack.
+      *(Tareas 2-3 y 5.)*
+- [x] Los 12 factores están comprobados/documentados. *(Matriz con evidencia en `README.md`.)*
+- [ ] k6 y Vegeta cumplen los umbrales acordados o las brechas están informadas. *(Pendiente:
+      Tarea 7 — falta el flujo `200` real y múltiples réplicas contra los umbrales de cátedra.)*
 - [ ] El usuario revisó la configuración de despliegue y los resultados antes de dar la tarea
-      por terminada.
+      por terminada. *(Pendiente: revisión final del usuario.)*
