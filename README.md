@@ -81,6 +81,40 @@ necesita un init externo. Al detenerlo, hay que dar un margen mayor que
 docker stop -t 15 <container>
 ```
 
+### Con Compose
+
+`docker-compose.yml` despliega **solo el Orquestador** sobre la red externa
+`mired` (la del stack de Traefik). No incluye Traefik ni los downstream, no
+publica el puerto 8080 al host y no fija `container_name`, así que se puede
+escalar a varias réplicas. La imagen se construye aparte y se referencia con
+`ORCH_IMAGE`, para poder desplegar distintas versiones:
+
+```bash
+docker build -t papersoul-orchestrator:v1 .
+cp .env.example .env          # completar EXTRACTOR_URL y PERSISTENCE_URL
+ORCH_IMAGE=papersoul-orchestrator:v1 docker compose up -d
+
+# escalar a N réplicas sin editar el archivo
+docker compose up -d --scale orchestrator=3
+```
+
+`EXTRACTOR_URL` y `PERSISTENCE_URL` son obligatorias: si faltan, Compose falla
+con un mensaje explícito. Es requisito que exista la red `mired` (la crea el
+stack de Traefik); este Compose no la crea ni la elimina.
+
+Para probar el flujo completo en local hay un override opcional
+`docker-compose.dev.yml` (no versionado) que agrega Extractor y Persistencia a
+partir de sus imágenes ya construidas:
+
+```bash
+docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
+docker build -t papersoul-persistencia:latest ../PaperSoul-Microservicio-Persistencia
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+Persistencia necesita un MongoDB accesible: apuntar `MONGODB_URI` al mongo que ya
+esté levantado (el override no incluye mongo).
+
 ## Configuración
 
 Todo se lee por variables de entorno en `internal/platform/config`. Si alguna es inválida el

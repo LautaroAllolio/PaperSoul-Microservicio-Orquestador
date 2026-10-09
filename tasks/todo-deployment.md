@@ -91,22 +91,38 @@ conecte a la red externa de Traefik y a los servicios downstream, sin incluir un
 Traefik ni publicar el puerto de la API directamente al host por defecto.
 
 **Criterios de aceptación:**
-- [ ] La configuración Compose contiene únicamente recursos propios del Orquestador.
-- [ ] Traefik no aparece como servicio, dependencia, imagen ni proceso a iniciar desde ese
-      Compose.
-- [ ] La red de entrada de Traefik se referencia como externa y su nombre se configura
-      según lo acordado; Compose no la elimina ni la administra.
-- [ ] Se pueden iniciar varias réplicas sin `container_name` fijo ni colisión de puertos.
-- [ ] URLs, límites y tiempos de espera se configuran desde entorno; no se cambia el
-      comportamiento local existente sin documentarlo.
+- [x] La configuración Compose contiene únicamente recursos propios del Orquestador.
+      *(`docker-compose.yml` con el único servicio `orchestrator`; `docker compose config
+      --services` lista solo `orchestrator`.)*
+- [x] Traefik no aparece como servicio, dependencia, imagen ni proceso a iniciar desde ese
+      Compose. *(Sin servicio, imagen ni dependencia de Traefik; `docker ps` no muestra
+      ningún Traefik levantado por este stack.)*
+- [x] La red de entrada de Traefik se referencia como externa y su nombre se configura
+      según lo acordado; Compose no la elimina ni la administra. *(`networks.mired` con
+      `external: true` y `name: ${TRAEFIK_NETWORK:-mired}`; tras `docker compose down` la red
+      `mired` sigue existiendo.)*
+- [x] Se pueden iniciar varias réplicas sin `container_name` fijo ni colisión de puertos.
+      *(`docker compose up -d` levanta 2 réplicas; ambas exponen solo `8080/tcp` interno, sin
+      publicar ningún puerto al host.)*
+- [x] URLs, límites y tiempos de espera se configuran desde entorno; no se cambia el
+      comportamiento local existente sin documentarlo. *(`EXTRACTOR_URL`/`PERSISTENCE_URL`
+      obligatorias vía `${VAR:?}`; límites y timeouts por variables; documentado en `README`
+      y `.env.example`.)*
+- [x] La imagen se construye aparte y el Compose solo la referencia
+      (`image: ${ORCH_IMAGE:-...}`, sin `build`), para poder desplegar distintas versiones.
 
 **Verificación:** Validar la configuración Compose y desplegar al menos dos réplicas,
 confirmando que cada una puede alcanzar los servicios configurados y que no hay puerto host
-fijo ni dependencia de iniciar Traefik desde el stack del Orquestador.
+fijo ni dependencia de iniciar Traefik desde el stack del Orquestador. *(Hecho: `docker
+compose config` válido; 2 réplicas en `mired`; el DNS de servicio resuelve a `172.18.0.2` y
+`172.18.0.3` y ambas responden `405` a `GET /api/v1/documents/process`; sin puertos host
+publicados. La conexión con los downstream reales se valida en la Tarea 7 con el override
+local `docker-compose.dev.yml`.)*
 
 **Dependencias:** Tareas 1 y 2.
 
-**Archivos probables:** `compose.yaml` (o convención existente acordada), documentación.
+**Archivos probables:** `docker-compose.yml`, `.env.example`, documentación. *(Local, no
+versionado: `docker-compose.dev.yml` con Extractor y Persistencia por imagen, sin `build`.)*
 
 **Alcance estimado:** Pequeño/mediano.
 

@@ -1,0 +1,38 @@
+# Compose del Orquestador. Define ÚNICAMENTE recursos propios del Orquestador:
+# no incluye Traefik ni los downstream (Extractor/Persistencia), que se
+# despliegan por separado y se alcanzan a través de la red externa `mired`.
+#
+# No publica el puerto 8080 al host (lo expone Traefik dentro de `mired`) y no
+# fija `container_name`, así que se pueden levantar varias réplicas.
+# La imagen se construye aparte (docker build) y se referencia aquí con
+# ORCH_IMAGE, de modo que se puedan desplegar distintas versiones.
+name: papersoul-orchestrator
+
+services:
+  orchestrator:
+    image: ${ORCH_IMAGE:-papersoul-orchestrator:local}
+    restart: unless-stopped
+    environment:
+      ORCH_ADDR: ${ORCH_ADDR:-:8080}
+      ORCH_MAX_FILE_SIZE: ${ORCH_MAX_FILE_SIZE:-26214400}
+      ORCH_VALIDATION_RELAXED: ${ORCH_VALIDATION_RELAXED:-true}
+      ORCH_MAX_CONCURRENCY: ${ORCH_MAX_CONCURRENCY:-8}
+      EXTRACTOR_URL: ${EXTRACTOR_URL:?defina EXTRACTOR_URL (p. ej. http://extractor:9000)}
+      EXTRACTOR_TIMEOUT: ${EXTRACTOR_TIMEOUT:-30s}
+      PERSISTENCE_URL: ${PERSISTENCE_URL:?defina PERSISTENCE_URL (p. ej. http://persistencia:8000)}
+      PERSISTENCE_TIMEOUT: ${PERSISTENCE_TIMEOUT:-15s}
+      ORCH_SHUTDOWN_TIMEOUT: ${ORCH_SHUTDOWN_TIMEOUT:-10s}
+    # Margen mayor que ORCH_SHUTDOWN_TIMEOUT para que el cierre graceful termine.
+    stop_grace_period: ${ORCH_STOP_GRACE_PERIOD:-15s}
+    deploy:
+      replicas: ${ORCH_REPLICAS:-2}
+    networks:
+      - mired
+    # Sin `ports:` (no se publica al host) y sin `container_name` (permite escalar).
+
+networks:
+  # Red del stack de Traefik: administrada fuera de este Compose. No se crea ni
+  # se elimina aquí; debe existir antes de `docker compose up`.
+  mired:
+    external: true
+    name: ${TRAEFIK_NETWORK:-mired}
