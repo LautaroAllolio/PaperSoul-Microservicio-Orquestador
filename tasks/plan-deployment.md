@@ -36,22 +36,72 @@ reescribirán los scripts de estrés del profesor.
   definirá solo el Orquestador; Traefik se ejecutará y desplegará por separado.
 - Traefik descubrirá las instancias del Orquestador a través de una red externa compartida.
   La configuración del Orquestador no creará ni administrará esa red o el proceso Traefik.
-- La API actual debe publicarse como HTTP sobre TCP. Traefik puede enrutar UDP, pero una
-  ruta UDP no transporta ni balancea este endpoint HTTP; ese requerimiento debe precisarse
-  antes de implementarlo.
+- La API se publica como **HTTP sobre TCP**. Confirmado: el proceso abre un listener
+  `net.Listen("tcp", ORCH_ADDR)` (`cmd/orchestrator/main.go`) y no existe ningún listener
+  UDP. Traefik puede enrutar UDP, pero ese requerimiento **no aplica** al Orquestador.
 - Se agregará `GET /health` como liveness del proceso: responderá saludable cuando el
   Orquestador esté sirviendo HTTP y no consultará Extracción ni Persistencia. No se agregará
   readiness en esta etapa. Esta decisión está acordada; la implementación queda pendiente.
-- La comprobación de salud, el reintento y el circuit breaker se configurarán en la
-  integración de Traefik solo tras definir sus semánticas. Traefik usará `GET /health` para
-  comprobar liveness. La indisponibilidad de una instancia puede excluirla de solicitudes
-  posteriores; no se asumirá que Traefik siempre repite una solicitud fallida en otra
-  instancia.
+- Traefik usará `GET /health` para comprobar liveness. La indisponibilidad de una instancia
+  puede excluirla de solicitudes posteriores; no se asumirá que Traefik siempre repite una
+  solicitud fallida en otra instancia.
+- Política de reintento/circuit breaker acordada (ver *Contrato de despliegue*): reintentar
+  ante fallo de conexión, timeout y respuestas `502/503/504`; como máximo **2 intentos**
+  totales con backoff de **500 ms**. No se reintentan los 4xx de negocio. El reintento es
+  seguro porque el endpoint es idempotente por checksum.
 - Los cuatro PDFs originales se conservan. Los archivos de carga se adaptan para probar el
   contrato del Orquestador, y Vegeta recibe cuerpos multipart generados bajo demanda sin
   duplicar ni transformar permanentemente esos PDFs.
-- No se fijarán umbrales de rendimiento arbitrarios: se usarán los criterios del curso o
-  los que confirme el usuario.
+- Los umbrales de rendimiento no se inventan: se usan los criterios del curso (ver
+  *Criterios de aceptación de carga*).
+
+## Contrato de despliegue
+
+Decisiones acordadas para el despliegue. Los valores marcados como pendientes se confirman
+en las tareas que los consumen.
+
+| Aspecto | Decisión |
+|---|---|
+| Protocolo de la API | HTTP/1.1 sobre TCP. Sin UDP. |
+| Descubrimiento Traefik | Docker provider (labels en el contenedor). |
+| Red compartida | Externa, nombre **`mired`**; se referencia con `external: true` y el Compose no la crea ni la administra. |
+| Puerto interno | **8080** (`ORCH_ADDR`). No se publica al host por defecto; lo expone Traefik. |
+| Host/path enrutado | **`mired.localhost`** → **`/api/v1/documents/process`**. |
+| Health check | `GET /health` como liveness (sin readiness). |
+| Retry | Reintentables: fallo de conexión, timeout y `502/503/504`. Máximo **2 intentos**, backoff **500 ms**. No se reintentan 4xx de negocio. |
+| Circuit breaker / réplica caída | Traefik deja de enviar tráfico a la instancia que falla su liveness. No se promete failover ni reejecución en otra instancia. |
+
+## Criterios de aceptación de carga (benchmark de cátedra)
+
+Meta: **superar** el microservicio de referencia de la cátedra. Los perfiles de los scripts
+ya versionados coinciden con los del enunciado.
+
+### A. Spike con k6 (modelo cerrado)
+
+- Perfil: subida a 100 VUs en 10 s, 20 s sostenidos a 100 VUs, bajada de 10 s a 0 VUs.
+  Coincide con `tests/spike_tests.js`.
+- A superar (referencia de la cátedra, 40 s): **1.037** peticiones procesadas; throughput
+  sostenido **25,35 req/s**; error **0,00%** (100% HTTP 200); **p50 = 1,88 s**,
+  **p90 = 7,83 s**, **p95 = 8,80 s**, máximo **13,94 s**.
+- Comando: `k6 run -e ORCH_BASE_URL=<url> tests/spike_tests.js`.
+
+### B. Carga fija con Vegeta (modelo abierto)
+
+- Perfil: **50 req/s** continuas durante **30 s** (1.500 solicitudes, rotando los 4 PDFs),
+  timeout de cliente **30 s**. Los 4 PDFs y los targets ya están en `tests/test_carga.txt`.
+- A superar (referencia de la cátedra): throughput efectivo completado **16,65 req/s**;
+  peticiones exitosas **998/1.500 (66,53%)**; timeouts de cliente (código 0) **501 (33,40%)**;
+  **p50 = 14,89 s**.
+- Comandos:
+  ```powershell
+  $env:VEGETA_RATE = 50
+  $env:VEGETA_DURATION = "30s"
+  go run ./tests/prepare_vegeta.go
+  vegeta attack -targets=tests/test_carga.txt `
+    -rate=$env:VEGETA_RATE -duration=$env:VEGETA_DURATION -timeout=30s | vegeta report
+  ```
+
+**Versiones usadas:** `k6` v2.3.0 y `vegeta` v12.12.0 (la cátedra no fijó versiones).
 
 ## Aplicación de los 12 factores
 
@@ -80,23 +130,27 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
 
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
-| Se requiere UDP para una API que hoy es HTTP/TCP | Configuración incompatible o ruta que no funciona | Confirmar qué tráfico necesita UDP y si corresponde al Orquestador antes de definir routers. |
-| Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Definir códigos/errores reintentables, límite y espera; validar con requests idempotentes y pruebas de instancia caída. |
-| Traefik y Orquestador no comparten red o proveedor de descubrimiento | Traefik no alcanza las réplicas | Confirmar cómo se ejecuta Traefik y documentar la red externa existente sin crear otro Traefik. |
+| Se requiere UDP para una API que hoy es HTTP/TCP | Configuración incompatible o ruta que no funciona | **Resuelto:** la API es HTTP/TCP y no se requiere UDP. |
+| Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Retry acotado a fallo de conexión/timeout y `502/503/504` (2 intentos, 500 ms); validar con requests idempotentes y pruebas de instancia caída. |
+| Traefik y Orquestador no comparten red o proveedor de descubrimiento | Traefik no alcanza las réplicas | Usar Docker provider y la red externa `mired` sin crear otro Traefik. |
 | `/health` confirma liveness, no disponibilidad de los downstream | Una instancia viva podría no poder completar procesamiento si falla una dependencia | Mantenerlo como liveness por decisión acordada; registrar métricas/errores downstream por separado y no interpretarlo como readiness. |
-| No se especifican umbrales de rendimiento | No se puede concluir objetivamente si una corrida aprueba | Obtener del curso los umbrales y el comando/versión de cada herramienta; no inventar criterios. |
+| No se especifican umbrales de rendimiento | No se puede concluir objetivamente si una corrida aprueba | **Resuelto:** umbrales provistos por la cátedra (ver *Criterios de aceptación de carga*). |
 
 ## Preguntas abiertas
 
-- ¿El Orquestador realmente debe recibir tráfico UDP? Si sí, ¿qué protocolo/endpoint UDP y
-  qué cliente lo consume? El código actual únicamente expone HTTP sobre TCP.
-- ¿Qué significa “reintentar y enviar a otra instancia”: volver a intentar solo ante error
-  de conexión, también ante ciertos status HTTP, o excluir instancias no saludables para
-  requests futuros? ¿Qué cantidad máxima y espera requiere el curso?
-- ¿Traefik usa Docker provider y ya existe una red externa compartida? ¿Cuál es el nombre
-  de la red y el dominio/path que debe enrutar?
-- ¿Qué comando/versión de k6 y Vegeta y qué umbrales entrega el profesor para aprobar las
-  pruebas?
+Resueltas en la Tarea 1:
+
+- **UDP:** no aplica; la API es HTTP sobre TCP y no hay listener UDP.
+- **Retry / failover:** reintentar ante fallo de conexión/timeout y `502/503/504`, hasta 2
+  intentos con backoff de 500 ms; una réplica no saludable se excluye del balanceo y no se
+  asume reejecución en otra instancia.
+- **Traefik:** Docker provider, red externa `mired`, host `mired.localhost` y path
+  `/api/v1/documents/process`.
+- **Umbrales:** provistos por la cátedra (ver *Criterios de aceptación de carga*).
+
+Resuelto:
+
+- Versiones de `k6` (v2.3.0) y `vegeta` (v12.12.0) a usar; la cátedra no las especificó.
 
 ## Aprobación
 

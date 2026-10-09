@@ -15,23 +15,23 @@ export const options = {
 const BASE_URL = __ENV.ORCH_BASE_URL || 'http://localhost:8080';
 const PROCESS_URL = `${BASE_URL}/api/v1/documents/process`;
 
-// Ejecutar k6 desde la raíz del repositorio del Orquestador.
+// k6 resuelve open() relativo a la ubicación de este script (tests/), no al CWD.
 const pdfFiles = [
     {
         name: '2020-Scrum-Guide-Spanish-Latin-South-American.pdf',
-        data: open('./tests/stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf', 'b'),
+        data: open('./stress/pdfs/2020-Scrum-Guide-Spanish-Latin-South-American.pdf', 'b'),
     },
     {
         name: 'Essential-Kanban-Condensed-Spanish.pdf',
-        data: open('./tests/stress/pdfs/Essential-Kanban-Condensed-Spanish.pdf', 'b'),
+        data: open('./stress/pdfs/Essential-Kanban-Condensed-Spanish.pdf', 'b'),
     },
     {
         name: 'Filosofia Lean.pdf',
-        data: open('./tests/stress/pdfs/Filosofia Lean.pdf', 'b'),
+        data: open('./stress/pdfs/Filosofia Lean.pdf', 'b'),
     },
     {
         name: 'scrum_manager_historias_usuario.pdf',
-        data: open('./tests/stress/pdfs/scrum_manager_historias_usuario.pdf', 'b'),
+        data: open('./stress/pdfs/scrum_manager_historias_usuario.pdf', 'b'),
     },
 ];
 

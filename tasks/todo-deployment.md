@@ -12,13 +12,13 @@ documentación al repositorio del Orquestador.
 proveedor/red de Traefik, health checks, retry/circuit breaker y pruebas de estrés.
 
 **Criterios de aceptación:**
-- [ ] Confirmado que el tráfico de la API actual es HTTP/TCP, o definido de forma concreta
+- [x] Confirmado que el tráfico de la API actual es HTTP/TCP, o definido de forma concreta
       el requisito UDP y su alcance dentro del Orquestador.
-- [ ] Registrados el proveedor de descubrimiento de Traefik, nombre de la red compartida,
+- [x] Registrados el proveedor de descubrimiento de Traefik, nombre de la red compartida,
       host/path de la API y el puerto interno del servicio.
 - [x] Acordado `GET /health` como liveness del proceso, sin comprobar disponibilidad de
       Extractor ni Persistencia y sin readiness por ahora.
-- [ ] Definidos errores reintentables, límite/espera de reintentos y comportamiento deseado
+- [x] Definidos errores reintentables, límite/espera de reintentos y comportamiento deseado
       al perder una réplica.
 - [x] Localizados los archivos agregados: `tests/spike_tests.js` (k6) y
       `tests/test_carga.txt` (targets tipo Vegeta).
@@ -27,9 +27,16 @@ proveedor/red de Traefik, health checks, retry/circuit breaker y pruebas de estr
 - [x] Recuperados los cuatro PDFs referenciados por k6; están en `tests/stress/pdfs/`.
 - [x] K6 lee los PDFs desde sus ubicaciones existentes bajo `tests/stress/pdfs/`.
 - [x] Vegeta usa payloads multipart generados localmente desde esos PDFs antes de la carga.
-- [ ] Validar `go test ./tests` y realizar una corrida smoke de k6 y Vegeta contra una
-      instancia accesible del Orquestador.
-- [ ] Definidos los umbrales de aceptación y comandos/versión de las herramientas.
+- [x] Validar `go test ./tests` y realizar una corrida smoke de k6 y Vegeta contra una
+      instancia accesible del Orquestador. *(Toolchain presente: go 1.27.1, k6 v2.3.0,
+      vegeta v12.12.0, docker 29.4.1. Smoke de conectividad contra el Orquestador local con
+      los downstream no disponibles: `go test ./tests` pasa, y k6 y Vegeta devuelven
+      `502 persistence-unavailable`. Es conectividad, no resultado de rendimiento. Además se
+      corrigió la ruta de `open()` en `tests/spike_tests.js`, que k6 resuelve relativa al
+      script y no al CWD.)*
+- [x] Definidos los umbrales de aceptación y comandos/versión de las herramientas.
+      *(Umbrales de cátedra en `plan-deployment.md`. Versiones usadas: go 1.27.1,
+      k6 v2.3.0, vegeta v12.12.0; la cátedra no fijó versiones.)*
 
 **Verificación:** Revisión del usuario de las decisiones escritas antes de configurar
 routers, health checks o pruebas.
@@ -190,20 +197,26 @@ acuerden y registrar los resultados conforme a los criterios del curso.
 - [x] Ambos tests apuntan a `POST /api/v1/documents/process` y envían el archivo en un
       campo multipart llamado `file`.
 - [x] Los cuatro PDFs que usa k6 están presentes en el repositorio.
-- [x] K6 resuelve los cuatro PDFs bajo `tests/stress/pdfs/` al ejecutarse desde la raíz del
-      repositorio.
+- [x] K6 resuelve los cuatro PDFs bajo `tests/stress/pdfs/`. *(Corregido: `open()` se
+      resuelve relativo a la ubicación del script, no al CWD; las rutas usan
+      `./stress/pdfs/...`.)*
 - [x] Vegeta genera sus cuerpos multipart con `go run ./tests/prepare_vegeta.go`; los
       artefactos generados se excluyen del control de versiones.
-- [ ] Los comandos, versiones de k6/Vegeta y criterios/umbrales requeridos quedan
-      registrados antes de ejecutar la validación final.
-- [ ] La configuración y el número de réplicas usados en cada corrida quedan anotados para
-      reproducibilidad.
+- [x] Los comandos, versiones de k6/Vegeta y criterios/umbrales requeridos quedan
+      registrados antes de ejecutar la validación final. *(go 1.27.1, k6 v2.3.0,
+      vegeta v12.12.0; comandos en `plan-deployment.md` y `README.md`.)*
+- [x] La configuración y el número de réplicas usados en cada corrida quedan anotados para
+      reproducibilidad. *(Smoke con 1 réplica local, `ORCH_ADDR=:8080`, `EXTRACTOR_URL` y
+      `PERSISTENCE_URL` apuntando a un puerto sin servicio.)*
 - [ ] Se reportan resultados de k6 y Vegeta contra una instancia y contra múltiples
-      réplicas usando los umbrales confirmados.
+      réplicas usando los umbrales confirmados. *(Parcial: corrida smoke contra 1 instancia
+      disponible, con 100% `502` por downstream ausente. Pendiente: flujo `200` real y
+      múltiples réplicas.)*
 - [ ] Se comprueba el comportamiento durante la caída de una réplica si forma parte de los
       requisitos acordados.
-- [ ] Se registran fallos/limitaciones explícitamente; no se declara éxito sin comparar con
-      los criterios de aceptación.
+- [x] Se registran fallos/limitaciones explícitamente; no se declara éxito sin comparar con
+      los criterios de aceptación. *(Sin downstream no hay `200`: k6 `status_codes avg=502` y
+      Vegeta reporta `502`; no se compara contra los umbrales de cátedra.)*
 
 **Verificación:** Adjuntar o resumir salida, métricas, servicio/URL probado, fixtures,
 configuración, versiones y umbrales de ambas herramientas; repetir cualquier corrida no
