@@ -53,6 +53,34 @@ go build -o bin/orchestrator ./cmd/orchestrator
 ./bin/orchestrator
 ```
 
+### Con Docker
+
+La imagen se construye desde este repositorio con un build multi-stage: compila
+como root en la etapa `builder` (que se descarta) y ejecuta únicamente el binario
+como usuario **no-root** sobre una base **distroless** (sin shell ni gestor de
+paquetes). `EXTRACTOR_URL` y `PERSISTENCE_URL` son obligatorias y **se pasan en
+runtime**; no quedan embebidas en la imagen.
+
+```bash
+docker build -t papersoul-orchestrator:local .
+
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e EXTRACTOR_URL=http://extractor:9000 \
+  -e PERSISTENCE_URL=http://persistencia:8000 \
+  papersoul-orchestrator:local
+```
+
+Las URLs downstream tienen que ser resolubles **desde dentro del contenedor**
+(nombres de servicio en la red de Compose, no `localhost` del host).
+
+El proceso es PID 1 y ya maneja SIGTERM/SIGINT con cierre graceful, así que no
+necesita un init externo. Al detenerlo, hay que dar un margen mayor que
+`ORCH_SHUTDOWN_TIMEOUT` (default 10s):
+
+```bash
+docker stop -t 15 <container>
+```
+
 ## Configuración
 
 Todo se lee por variables de entorno en `internal/platform/config`. Si alguna es inválida el

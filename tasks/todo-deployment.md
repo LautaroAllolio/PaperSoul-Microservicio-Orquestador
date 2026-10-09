@@ -54,17 +54,27 @@ adecuada para runtime, con configuración externalizada, usuario no privilegiado
 compatible y manejo correcto de señales/cierre.
 
 **Criterios de aceptación:**
-- [ ] La imagen se construye desde los manifiestos Go del Orquestador sin modificar otros
-      microservicios.
-- [ ] La imagen ejecuta el binario compilado, no descarga dependencias al iniciar y no
-      requiere escribir documentos ni estado duradero en el filesystem.
-- [ ] La configuración sensible/operativa se suministra en runtime, nunca queda embebida en
-      la imagen.
-- [ ] SIGTERM permite el cierre graceful existente dentro del tiempo de gracia configurado.
+- [x] La imagen se construye desde los manifiestos Go del Orquestador sin modificar otros
+      microservicios. *(`Dockerfile` multi-stage + `.dockerignore`; `docker build` OK,
+      imagen `papersoul-orchestrator:local` de 20,7 MB. Solo se tocó el repo del Orquestador.)*
+- [x] La imagen ejecuta el binario compilado, no descarga dependencias al iniciar y no
+      requiere escribir documentos ni estado duradero en el filesystem. *(`go mod download`
+      ocurre en la etapa builder; el runtime solo copia `/out/orchestrator` y arranca con
+      `--read-only` sin error.)*
+- [x] La configuración sensible/operativa se suministra en runtime, nunca queda embebida en
+      la imagen. *(Solo se fija `ORCH_ADDR=:8080`; `EXTRACTOR_URL` y `PERSISTENCE_URL` se
+      pasan por `-e` en el arranque.)*
+- [x] SIGTERM permite el cierre graceful existente dentro del tiempo de gracia configurado.
+      *(`docker stop -t 15` con `ORCH_SHUTDOWN_TIMEOUT=10s`: logs "señal recibida, cerrando el
+      servidor" y "cierre graceful completo"; salida 0.)*
+- [x] Usuario no privilegiado en runtime: `Config.User=65532` (distroless nonroot); el
+      builder trabaja como root y se descarta.
 
 **Verificación:** Construir la imagen, arrancar el contenedor con sus variables requeridas,
 comprobar logs JSON en stdout y detenerlo verificando el cierre; ejecutar la suite Go
-existente.
+existente. *(Hecho: logs JSON con `"msg":"orquestador escuchando"` a stdout; `GET` al
+endpoint responde 405; `make ci` pasa completo tras normalizar a LF dos archivos de `tests/`
+que estaban en CRLF, como exige `.gitattributes`.)*
 
 **Dependencias:** Tarea 1 para elegir contrato de puerto, runtime y apagado.
 

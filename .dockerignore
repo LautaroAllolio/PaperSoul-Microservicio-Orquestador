@@ -1,0 +1,29 @@
+# Contexto de build: lo que no hace falta (y estorba) dentro de la imagen.
+# Mantenerlo chico acelera el build y reduce la superficie de la imagen final.
+
+# Control de versiones y CI
+.git
+.github
+.gitignore
+.gitattributes
+
+# Documentación y tareas: no se usan en runtime.
+README.md
+LICENSE
+tasks/
+
+# Contrato OpenAPI: no lo consume el binario en runtime.
+api/
+
+# Tests y artefactos de carga: los PDFs pesan ~27 MB.
+tests/
+
+# Binarios locales y entorno/secrets: NUNCA deben entrar en la imagen.
+bin/
+.env
+.env.*
+.envrc
+
+# Manifiestos de la propia imagen
+Dockerfile
+.dockerignore
