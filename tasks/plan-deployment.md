@@ -21,6 +21,7 @@ reescribirán los scripts de estrés del profesor.
 - Hay límites de tamaño y concurrencia por proceso; la deduplicación por checksum hace
   seguro repetir el procesamiento del mismo documento bajo el contrato actual.
 - El repositorio del Orquestador no contiene Dockerfile ni Compose propios.
+- Actualmente no existe un endpoint de health en el Orquestador.
 - El README existente describe el contrato de la API y su operación local.
 - Se encontraron `tests/spike_tests.js` (k6), `tests/test_carga.txt` (targets en formato
   Vegeta) y los cuatro PDFs en `tests/stress/pdfs/`.
@@ -38,10 +39,14 @@ reescribirán los scripts de estrés del profesor.
 - La API actual debe publicarse como HTTP sobre TCP. Traefik puede enrutar UDP, pero una
   ruta UDP no transporta ni balancea este endpoint HTTP; ese requerimiento debe precisarse
   antes de implementarlo.
+- Se agregará `GET /health` como liveness del proceso: responderá saludable cuando el
+  Orquestador esté sirviendo HTTP y no consultará Extracción ni Persistencia. No se agregará
+  readiness en esta etapa. Esta decisión está acordada; la implementación queda pendiente.
 - La comprobación de salud, el reintento y el circuit breaker se configurarán en la
-  integración de Traefik solo tras definir sus semánticas. La indisponibilidad de una
-  instancia puede excluirla de solicitudes posteriores; no se asumirá que Traefik siempre
-  repite una solicitud fallida en otra instancia.
+  integración de Traefik solo tras definir sus semánticas. Traefik usará `GET /health` para
+  comprobar liveness. La indisponibilidad de una instancia puede excluirla de solicitudes
+  posteriores; no se asumirá que Traefik siempre repite una solicitud fallida en otra
+  instancia.
 - Los cuatro PDFs originales se conservan. Los archivos de carga se adaptan para probar el
   contrato del Orquestador, y Vegeta recibe cuerpos multipart generados bajo demanda sin
   duplicar ni transformar permanentemente esos PDFs.
@@ -78,7 +83,7 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
 | Se requiere UDP para una API que hoy es HTTP/TCP | Configuración incompatible o ruta que no funciona | Confirmar qué tráfico necesita UDP y si corresponde al Orquestador antes de definir routers. |
 | Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Definir códigos/errores reintentables, límite y espera; validar con requests idempotentes y pruebas de instancia caída. |
 | Traefik y Orquestador no comparten red o proveedor de descubrimiento | Traefik no alcanza las réplicas | Confirmar cómo se ejecuta Traefik y documentar la red externa existente sin crear otro Traefik. |
-| El health check evalúa solo el proceso o también los downstream | Instancias listas que no procesan, o todas excluidas por una dependencia caída | Acordar semántica de readiness/liveness y sus efectos sobre el balanceo. |
+| `/health` confirma liveness, no disponibilidad de los downstream | Una instancia viva podría no poder completar procesamiento si falla una dependencia | Mantenerlo como liveness por decisión acordada; registrar métricas/errores downstream por separado y no interpretarlo como readiness. |
 | No se especifican umbrales de rendimiento | No se puede concluir objetivamente si una corrida aprueba | Obtener del curso los umbrales y el comando/versión de cada herramienta; no inventar criterios. |
 
 ## Preguntas abiertas
@@ -90,12 +95,10 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
   requests futuros? ¿Qué cantidad máxima y espera requiere el curso?
 - ¿Traefik usa Docker provider y ya existe una red externa compartida? ¿Cuál es el nombre
   de la red y el dominio/path que debe enrutar?
-- ¿La readiness debe fallar cuando Extractor o Persistencia no responden, o solo debe
-  confirmar que el proceso HTTP del Orquestador está disponible?
 - ¿Qué comando/versión de k6 y Vegeta y qué umbrales entrega el profesor para aprobar las
   pruebas?
 
 ## Aprobación
 
 La implementación comienza después de que el usuario revise este plan y aclare las
-decisiones abiertas que afecten el contrato de red, health checks y pruebas de carga.
+decisiones abiertas que afecten el contrato de red, retry/circuit breaker y pruebas de carga.

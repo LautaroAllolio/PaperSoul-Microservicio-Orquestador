@@ -16,8 +16,10 @@ proveedor/red de Traefik, health checks, retry/circuit breaker y pruebas de estr
       el requisito UDP y su alcance dentro del Orquestador.
 - [ ] Registrados el proveedor de descubrimiento de Traefik, nombre de la red compartida,
       host/path de la API y el puerto interno del servicio.
-- [ ] Definidos la semántica de health check, errores reintentables, límite/espera de
-      reintentos y comportamiento deseado al perder una réplica.
+- [x] Acordado `GET /health` como liveness del proceso, sin comprobar disponibilidad de
+      Extractor ni Persistencia y sin readiness por ahora.
+- [ ] Definidos errores reintentables, límite/espera de reintentos y comportamiento deseado
+      al perder una réplica.
 - [x] Localizados los archivos agregados: `tests/spike_tests.js` (k6) y
       `tests/test_carga.txt` (targets tipo Vegeta).
 - [x] Adaptados los requests para probar `POST /api/v1/documents/process` con multipart
@@ -91,7 +93,31 @@ fijo ni dependencia de iniciar Traefik desde el stack del Orquestador.
 
 **Alcance estimado:** Pequeño/mediano.
 
-### Tarea 4: Configurar enrutamiento, salud, balanceo y resiliencia con Traefik externo
+### Tarea 4: Añadir endpoint de liveness del Orquestador
+
+**Descripción:** Implementar `GET /health` como comprobación de vida local del proceso HTTP.
+Debe responder con éxito cuando la instancia atiende HTTP y no debe consultar Extracción ni
+Persistencia; la integración con Traefik se configura en la tarea siguiente.
+
+**Criterios de aceptación:**
+- [ ] `GET /health` devuelve HTTP 200 sin invocar clientes downstream.
+- [ ] El método/path quedan declarados en el router y en el contrato OpenAPI.
+- [ ] Los tests cubren la respuesta de liveness y verifican que la ruta no necesita
+      configuración ni disponibilidad de downstream.
+- [ ] El README deja de describir el health como un POST de procesamiento e indica que
+      `/health` es liveness, no readiness.
+
+**Verificación:** `go test ./internal/handler/...` y `go test ./api/...`; ejecutar el
+servicio con URLs downstream no disponibles y comprobar que `GET /health` responde 200.
+
+**Dependencias:** Tarea 1 para la decisión de contrato; no requiere Docker ni Traefik.
+
+**Archivos probables:** `internal/handler/router.go`, tests del router, `api/openapi.yaml`,
+tests OpenAPI y `README.md`.
+
+**Alcance estimado:** Mediano.
+
+### Tarea 5: Configurar enrutamiento, salud, balanceo y resiliencia con Traefik externo
 
 **Descripción:** Añadir únicamente la configuración asociada al servicio Orquestador para
 que la instancia Traefik existente pueda descubrir/rutear sus réplicas y aplicar las
@@ -100,8 +126,10 @@ políticas acordadas.
 **Criterios de aceptación:**
 - [ ] La configuración apunta al servicio HTTP/TCP y al puerto interno real del
       Orquestador; no configura una ruta UDP para tráfico HTTP.
-- [ ] Una health check distingue el estado acordado y una instancia no saludable deja de
-      recibir tráfico conforme al comportamiento documentado.
+- [ ] La health check de Traefik consulta `GET /health`; no se trata como readiness ni como
+      indicador de disponibilidad de Extractor/Persistencia.
+- [ ] Una instancia que falle el liveness deja de recibir tráfico conforme al
+      comportamiento documentado.
 - [ ] El balanceo distribuye requests entre réplicas disponibles.
 - [ ] Las políticas de retry/circuit breaker reflejan los límites acordados y no se
       describen como garantía de reejecución en otra instancia si Traefik no la ofrece.
@@ -111,10 +139,9 @@ políticas acordadas.
 una réplica durante tráfico controlado y comprobar que las restantes continúan atendiendo;
 confirmar la recuperación de la réplica sin modificar servicios ajenos.
 
-**Dependencias:** Tareas 1, 2 y 3.
+**Dependencias:** Tareas 1, 2, 3 y 4.
 
-**Archivos probables:** Compose/labels del Orquestador, handler/config solo si se acuerda
-añadir endpoint de salud, README.
+**Archivos probables:** Compose/labels del Orquestador y documentación de despliegue.
 
 **Alcance estimado:** Mediano.
 
@@ -128,7 +155,7 @@ añadir endpoint de salud, README.
 
 ## Fase 3: Factores y carga
 
-### Tarea 5: Documentar y verificar los 12 factores
+### Tarea 6: Documentar y verificar los 12 factores
 
 **Descripción:** Completar en la documentación del Orquestador una matriz de los 12
 factores basada en el comportamiento real del servicio, indicando cumplimiento, evidencia
@@ -145,13 +172,13 @@ y cualquier límite o factor no aplicable.
 **Verificación:** Revisar cada factor contra la imagen, Compose, aplicación y configuración
 de runtime; resolver las brechas o registrarlas como pendientes.
 
-**Dependencias:** Tareas 2 y 3.
+**Dependencias:** Tareas 2, 3 y 4.
 
 **Archivos probables:** `README.md`, documentación de despliegue del Orquestador.
 
 **Alcance estimado:** Pequeño/mediano.
 
-### Tarea 6: Validar y ejecutar los archivos de carga de k6 y Vegeta provistos
+### Tarea 7: Validar y ejecutar los archivos de carga de k6 y Vegeta provistos
 
 **Descripción:** Confirmar primero el servicio objetivo de los archivos existentes
 `tests/spike_tests.js` y `tests/test_carga.txt`, resolver el acceso a sus PDFs de entrada y
@@ -183,7 +210,7 @@ configuración, versiones y umbrales de ambas herramientas; repetir cualquier co
 concluyente. No contar un `404`/error de formato como resultado de rendimiento del
 Orquestador.
 
-**Dependencias:** Tareas 1, 3 y 4; Tarea 5 para la documentación final.
+**Dependencias:** Tareas 1, 3, 4 y 5; Tarea 6 para la documentación final.
 
 **Archivos probables:** `tests/spike_tests.js`, `tests/test_carga.txt`,
 `tests/prepare_vegeta.go`, `tests/vegeta_payloads_test.go`, documentación del Orquestador.
