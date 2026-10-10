@@ -279,15 +279,29 @@ acuerden y registrar los resultados conforme a los criterios del curso.
 - [x] La configuración y el número de réplicas usados en cada corrida quedan anotados para
       reproducibilidad. *(Smoke con 1 réplica local, `ORCH_ADDR=:8080`, `EXTRACTOR_URL` y
       `PERSISTENCE_URL` apuntando a un puerto sin servicio.)*
-- [ ] Se reportan resultados de k6 y Vegeta contra una instancia y contra múltiples
-      réplicas usando los umbrales confirmados. *(Parcial: corrida smoke contra 1 instancia
-      disponible, con 100% `502` por downstream ausente. Pendiente: flujo `200` real y
-      múltiples réplicas.)*
-- [ ] Se comprueba el comportamiento durante la caída de una réplica si forma parte de los
-      requisitos acordados.
+- [x] Se reportan resultados de k6 y Vegeta contra una instancia y contra múltiples
+      réplicas usando los umbrales confirmados. *(Resuelto el bloqueo previo: la brecha
+      `by-checksum` vs `by-hash` se cerró agregando `GET /api/v1/documents/by-checksum/
+      {pdf_hash}` en el repo de Persistencia (200 con `{id,pdf_hash,filename,page_count}` /
+      404 `document-not-found`), cambio aditivo y retrocompatible. Smoke real por Traefik:
+      1er `POST` `200 PROCESSED`, repetido `200 REUSED`. Resultados con 4 PDFs precalentados,
+      `ORCH_MAX_CONCURRENCY=128`, downstream reales — **k6** 1→2 réplicas: 487→594 reqs,
+      10,2→12,7 req/s, p50 1,62→0,69 s, error 2,66 %→0,84 %; **Vegeta** 1→2 réplicas:
+      throughput 25,98→38,02 req/s, éxito 59,9 %→85 %, p50 85 ms→789 ms. Con 2 réplicas
+      Vegeta **supera** la referencia (16,65 req/s, 66,53 %); k6 supera p50 pero no logra su
+      throughput/p90 (cuello de botella: subida de PDFs por el loopback Docker/WSL2). Tablas
+      completas en `plan-deployment.md` → *Resultados de la campaña de carga* y `README.md`.)*
+- [x] Se comprueba el comportamiento durante la caída de una réplica si forma parte de los
+      requisitos acordados. *(Vegeta 50 rps × 40 s con `docker stop` de una réplica a t≈18 s:
+      63 % de éxito, 147×`502` —peticiones aún enrutadas a la instancia moribunda hasta que su
+      healthcheck la saca— y 593×`503` (semáforo de la réplica restante). Coherente con el
+      contrato: no se promete failover ni reejecución en otra instancia.)*
 - [x] Se registran fallos/limitaciones explícitamente; no se declara éxito sin comparar con
       los criterios de aceptación. *(Sin downstream no hay `200`: k6 `status_codes avg=502` y
-      Vegeta reporta `502`; no se compara contra los umbrales de cátedra.)*
+      Vegeta reporta `502`. Con downstream, el throughput de k6 queda por debajo de la
+      referencia por la E/S de subida en WSL2; limitación documentada. Pendiente menor: el
+      `PROCESSED` reporta metadata vacía (`fileName`/`pageCount`) porque el `201` de
+      Persistencia no incluye esos campos —decisión de su diseño, no bloquea la carga.)*
 
 **Verificación:** Adjuntar o resumir salida, métricas, servicio/URL probado, fixtures,
 configuración, versiones y umbrales de ambas herramientas; repetir cualquier corrida no
@@ -310,7 +324,8 @@ Los PDFs originales permanecen intactos.
 - [x] La imagen y el Compose del Orquestador funcionan sin iniciar Traefik desde ese stack.
       *(Tareas 2-3 y 5.)*
 - [x] Los 12 factores están comprobados/documentados. *(Matriz con evidencia en `README.md`.)*
-- [ ] k6 y Vegeta cumplen los umbrales acordados o las brechas están informadas. *(Pendiente:
-      Tarea 7 — falta el flujo `200` real y múltiples réplicas contra los umbrales de cátedra.)*
+- [ ] k6 y Vegeta cumplen los umbrales acordados o las brechas están informadas.
+      *(Pendiente: Tarea 7 — bloqueada por la brecha `by-checksum` (Orquestador) vs
+      `by-hash` (Persistencia real); en coordinación con el equipo de Persistencia.)*
 - [ ] El usuario revisó la configuración de despliegue y los resultados antes de dar la tarea
       por terminada. *(Pendiente: revisión final del usuario.)*

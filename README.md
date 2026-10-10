@@ -318,6 +318,25 @@ vegeta attack -targets=tests/test_carga.txt -duration=$env:VEGETA_DURATION -rate
 
 Los PDFs de entrada están en `tests/stress/pdfs/`. Los cuerpos generados se guardan en
 `tests/vegeta-generated/`, carpeta ignorada por Git.
+
+### Resultados (deploy local, downstream reales)
+
+Entorno WSL2 (8 vCPU, 5,6 GiB), 4 PDFs precalentados, `ORCH_MAX_CONCURRENCY=128`, acceso por
+Traefik HTTPS. Detalle y comparación con el benchmark en
+[`tasks/plan-deployment.md`](./tasks/plan-deployment.md) → *Resultados de la campaña de carga*.
+
+| Herramienta | Réplicas | req/s | éxito | p50 | p90 |
+|---|---|---|---|---|---|
+| k6 (spike 100 VUs) | 1 | 10,2 | 97,3 % | 1,62 s | 21,76 s |
+| k6 (spike 100 VUs) | 2 | 12,7 | 99,2 % | 0,69 s | 19,13 s |
+| Vegeta (50 rps × 30 s) | 1 | 25,98 | 59,9 % | 85 ms | 9,76 s |
+| Vegeta (50 rps × 30 s) | 2 | 38,02 | 85,0 % | 789 ms | 8,57 s |
+
+Con 2 réplicas, Vegeta **supera** la referencia de cátedra (16,65 req/s, 66,53 %, p50 14,89 s).
+El throughput de k6 está limitado por la subida de los PDFs (hasta 8,9 MB) por el loopback
+Docker/WSL2, no por el Orquestador.
+
+
 Definir `VEGETA_DURATION` y `VEGETA_RATE` con los valores indicados por el profesor. Ambas
 herramientas ejercitan el endpoint del Orquestador.
 

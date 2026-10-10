@@ -106,6 +106,62 @@ ya versionados coinciden con los del enunciado.
 
 **Versiones usadas:** `k6` v2.3.0 y `vegeta` v12.12.0 (la cátedra no fijó versiones).
 
+## Resultados de la campaña de carga
+
+**Entorno:** WSL2, 8 vCPU, 5,6 GiB RAM. Downstream **reales** (Extracción + Persistencia +
+Mongo sobre la red `mired`); acceso al Orquestador por **Traefik HTTPS**
+(`orquestador.universidad.localhost`). Los 4 PDFs de prueba se **precalentaron** (un `POST`
+por PDF) para que las corridas midan el camino `REUSED` y no la extracción en frío.
+
+**Configuración anotada:** `ORCH_MAX_CONCURRENCY=128`. El default del binario es **8** y el
+middleware `MaxConcurrency` **rechaza con `503` sin encolar**; con 100 VUs y límite 8
+cualquier corrida daría ~92 % de `503` *por diseño*. Se sube el semáforo para que el límite
+no sea el objeto de la medición (memoria observada del proceso: ~407 MiB en pico, sin OOM).
+
+### A. k6 — spike 100 VUs (10 s ↑ / 20 s sostenido / 10 s ↓)
+
+| Réplicas | reqs | req/s | error | p50 | p90 | p95 |
+|---|---|---|---|---|---|---|
+| 1 | 487 | 10,2 | 2,66 % (13×`504`) | **1,62 s** | 21,76 s | 27,96 s |
+| 2 | 594 | 12,7 | 0,84 % (5 code 0) | **0,69 s** | 19,13 s | 27,20 s |
+| *Referencia cátedra* | *1.037* | *25,35* | *0,00 %* | *1,88 s* | *7,83 s* | *—* |
+
+### B. Vegeta — 50 rps × 30 s (timeout 30 s)
+
+| Réplicas | reqs | throughput | éxito | p50 | p90 | p95 | fallos |
+|---|---|---|---|---|---|---|---|
+| 1 | 1.500 | 25,98/s | 59,93 % | 85 ms | 9,76 s | 11,59 s | `503`×601 |
+| 2 | 1.500 | **38,02/s** | **85,00 %** | 789 ms | 8,57 s | 12,08 s | `503`×225 |
+| *Referencia cátedra* | *1.500* | *16,65/s* | *66,53 %* | *14,89 s* | *—* | *—* | *501 timeouts* |
+
+### C. Caída de una réplica bajo carga (failover)
+
+Vegeta 50 rps × 40 s; a t≈18 s se detiene una de las dos réplicas (`docker stop`).
+
+| reqs | throughput | éxito | 200 | 502 | 503 | p50 | p90 |
+|---|---|---|---|---|---|---|---|
+| 2.000 | 28,62/s | 63,00 % | 1.260 | 147 | 593 | 557 ms | 11,20 s |
+
+Los `502` son peticiones que Traefik aún enruta a la instancia que se está deteniendo, hasta
+que su healthcheck (`interval=10s`) la saca del balanceo; los `503` son el semáforo de la
+réplica restante, que asume toda la carga. Es coherente con el contrato acordado: **no se
+promete failover ni reejecución en otra instancia**.
+
+### Lectura de los resultados
+
+- **Vegeta (el perfil que fija el enunciado):** con 2 réplicas se **supera** la referencia en
+  throughput (38,02 vs 16,65 req/s), proporción de éxito (85 % vs 66,53 %) y latencia p50
+  (789 ms vs 14,89 s). Con 1 réplica también se supera throughput y p50.
+- **k6 (modelo cerrado):** con 2 réplicas se **supera** la referencia en p50 (0,69 s vs
+  1,88 s) y el error queda casi nulo, pero **no** se alcanza su throughput (12,7 vs 25,35
+  req/s) ni su p90 (19,13 s vs 7,83 s). El cuello de botella identificado es la **subida de
+  los PDFs** (hasta 8,9 MB) por el loopback Docker/WSL2: cada corrida mueve ~1,6–2,1 GB
+  (`data_sent`) y el modelo cerrado de k6 serializa la subida por cada VU. En Vegeta, que es
+  un modelo abierto (50 rps sin importar el tiempo por request), el mismo sistema sí supera
+  la referencia.
+- El throughput de k6 **mejora** al pasar de 1 a 2 réplicas (487 → 594 reqs; p50 1,62 → 0,69 s)
+  aunque no de forma lineal, por el límite de E/S descrito.
+
 ## Aplicación de los 12 factores
 
 | Factor | Verificación/criterio para el Orquestador |
