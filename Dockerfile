@@ -3,7 +3,7 @@
 # --- Etapa builder: compila el binario estático -------------------------------
 # Trabaja como root para descargar módulos y compilar; esta imagen se descarta y
 # no llega al contenedor final (ahí se corre como usuario no-root).
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 
 WORKDIR /src
 
