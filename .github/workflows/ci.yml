@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # La versión sale de go.mod (1.25.0), que a su vez la exige pdfcpu.
+      # La versión de Go sale de go.mod.
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

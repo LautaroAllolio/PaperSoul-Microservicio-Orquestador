@@ -38,7 +38,10 @@ a Extracción ni a Persistencia.
 
 ## Requisitos
 
-- Go ≥ 1.25 (la versión de `pdfcpu` usada exige esa directiva en `go.mod`).
+- Go ≥ 1.26 (`go.mod`); la imagen se compila con `golang:1.27-bookworm`.
+- Docker Engine con Compose v2 para construir la imagen y levantar el stack local.
+- Opcional: `k6` y `vegeta` para las pruebas de carga, y `grype` para el escaneo de
+  vulnerabilidades.
 
 ## Cómo correr
 
@@ -83,6 +86,9 @@ consultará Traefik), no como readiness de los downstream:
 curl -sS http://localhost:8080/health   # {"status":"ok"}
 ```
 
+Ese `curl` funciona con el `docker run -p` de arriba: con Compose el puerto 8080 no se
+publica al host (ver *Puesta en marcha local*).
+
 El proceso es PID 1 y ya maneja SIGTERM/SIGINT con cierre graceful, así que no
 necesita un init externo. Al detenerlo, hay que dar un margen mayor que
 `ORCH_SHUTDOWN_TIMEOUT` (default 10s):
@@ -114,16 +120,129 @@ stack de Traefik); este Compose no la crea ni la elimina.
 
 Para probar el flujo completo en local hay un override opcional
 `docker-compose.dev.yml` (no versionado) que agrega Extractor y Persistencia a
-partir de sus imágenes ya construidas:
+partir de sus imágenes ya construidas. El procedimiento completo —MongoDB, red
+`mired`, variables, build, verificación y teardown— está en
+*Puesta en marcha local (flujo completo)*.
+
+### Puesta en marcha local (flujo completo)
+
+Para probar el flujo real —Orquestador + Extractor + Persistencia + MongoDB, publicado
+por Traefik— en una máquina de desarrollo. Los comandos de Docker se ejecutan desde la
+raíz del repositorio en WSL/Linux; el `curl` se puede correr desde PowerShell o WSL.
+
+**Prerrequisitos**
+
+- Docker Engine con Compose v2.
+- El stack de Traefik del proyecto levantado (no forma parte de este repo): provee la
+  red `mired`, el puerto 443 y el certificado wildcard `*.universidad.localhost`.
+- MongoDB accesible desde `mired` como `mongodb:27017` (tampoco forma parte de este
+  repo; lo usa Persistencia, no el Orquestador).
+- `docker-compose.dev.yml` en la raíz. **No está versionado** (está en `.gitignore`):
+  si clonaste el repo no lo vas a tener; pedílo o recreálo con los servicios
+  `extractor` y `persistencia`.
+
+Si la red `mired` no existe:
 
 ```bash
-docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
-docker build -t papersoul-persistencia:latest ../PaperSoul-Microservicio-Persistencia
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+docker network create mired
 ```
 
-Persistencia necesita un MongoDB accesible: apuntar `MONGODB_URI` al mongo que ya
-esté levantado (el override no incluye mongo).
+**1. Variables de entorno**
+
+```bash
+cp .env.example .env
+```
+
+Completar en `.env` (las URLs se resuelven por nombre de servicio dentro de la red;
+no uses `localhost`):
+
+```dotenv
+EXTRACTOR_URL=http://extractor:9000
+PERSISTENCE_URL=http://persistencia:8000
+MONGODB_URI=mongodb://<usuario>:<clave>@mongodb:27017/papersoul?authSource=admin
+ORCH_IMAGE=papersoul-orchestrator:local
+ORCH_REPLICAS=2
+```
+
+`MONGODB_URI` lo consume el override local y está comentada en `.env.example`:
+descomentala y completá las credenciales.
+
+**2. Construir las imágenes**
+
+```bash
+docker build -t papersoul-orchestrator:local .
+docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
+docker build -t papersoul-persistencia:latest ../PaperSoul-Microservicio-Persistencia
+```
+
+**3. Levantar el stack**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+```
+
+Quedan las réplicas del Orquestador (`ORCH_REPLICAS`, default 2) más 3 de Extractor y
+3 de Persistencia. El Orquestador **no publica el 8080**: se llega únicamente por
+Traefik.
+
+**4. Verificar el liveness**
+
+El router público solo expone `/api/v1/documents/process`; `/health` se consulta
+dentro de la red (la imagen distroless no trae shell ni `curl`):
+
+```bash
+docker run --rm --network mired curlimages/curl -sS http://orchestrator:8080/health
+```
+
+Respuesta esperada: `{"status":"ok"}`. La URL pública
+`https://orquestador.universidad.localhost/health` devuelve 404 a propósito: no hay
+router para ese path.
+
+**5. Probar el endpoint**
+
+Desde PowerShell (Windows):
+
+```powershell
+curl.exe -k -sS -X POST "https://127.0.0.1/api/v1/documents/process" `
+  -H "Host: orquestador.universidad.localhost" `
+  -F "file=@tests/stress/pdfs/Filosofia Lean.pdf;type=application/pdf"
+```
+
+Desde WSL:
+
+```bash
+curl -k -sS -X POST https://127.0.0.1/api/v1/documents/process \
+  -H 'Host: orquestador.universidad.localhost' \
+  -F 'file=@tests/stress/pdfs/Filosofia Lean.pdf;type=application/pdf'
+```
+
+- `-k` acepta el certificado wildcard del Traefik local.
+- `Host` es el que usa el router de Traefik; sin ese header la respuesta es 404.
+- La primera vez responde `PROCESSED`; si el PDF ya se procesó, `REUSED`. Para
+  ejercitar el camino de extracción usá un PDF que todavía no hayas enviado.
+
+**6. Bajar el stack**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+MongoDB y Traefik se bajan desde sus propios stacks.
+
+**Si algo falla**
+
+- `network mired declared as external, but could not be found` → crear la red.
+- `defina EXTRACTOR_URL` / `defina PERSISTENCE_URL` / `Defina MONGODB_URI` → falta la
+  variable en `.env`.
+- 404 en la URL pública → falta el header `Host` o el path no es exactamente
+  `/api/v1/documents/process`.
+- `curl http://localhost:8080` no responde → el Compose no publica el puerto; usá
+  Traefik o `docker run -p 8080:8080`.
+- 502/504 → downstream no disponible:
+  `docker compose -f docker-compose.yml -f docker-compose.dev.yml logs extractor persistencia orchestrator`.
+- Error de certificado → `-k` en curl, `--insecure-skip-tls-verify` en k6,
+  `-insecure` en Vegeta.
 
 ## Integración con Traefik
 
@@ -138,6 +257,9 @@ contenedor:
 - **Health check**: `GET /health` sobre el balanceador del servicio (`interval=10s`,
   `timeout=3s`). Es liveness del proceso, no readiness ni disponibilidad de los downstream:
   la réplica que falle queda fuera de la rotación y vuelve sola cuando recupera el liveness.
+  El router público **no** expone `/health`: solo matchea
+  `Host(...) && Path('/api/v1/documents/process')`. El healthcheck es interno, contra el
+  puerto del contenedor.
 - **Balanceo**: las réplicas comparten el nombre de servicio del balanceador
   (`orchestrator`): Traefik las agrupa y reparte las requests entre las sanas. No hay
   `container_name` ni puertos publicados al host.
@@ -148,7 +270,9 @@ contenedor:
   deduplicación por checksum.
 
 Para ejercitar el endpoint publicado, las herramientas usan la URL del host (ver *Pruebas de
-carga*), por ejemplo `ORCH_BASE_URL=https://orquestador.universidad.localhost` para k6.
+carga*): alcanza con `ORCH_BASE_URL=https://orquestador.universidad.localhost` en k6, o
+`ORCH_BASE_URL=https://127.0.0.1` + `ORCH_HOST_HEADER=orquestador.universidad.localhost` si
+no hay resolución DNS.
 
 ## Configuración
 
@@ -267,6 +391,39 @@ Los tests de integración (`internal/handler/integration_test.go`) montan el cab
 Persistencia también por HTTP, y cubren el flujo completo, el dedup, el 504 por timeout, el 413
 y el escaneo que verifica que ninguna ruta de producción escribe a disco.
 
+### Escaneo de vulnerabilidades (Grype)
+
+Usamos [Grype](https://github.com/anchore/grype) para revisar la imagen y las dependencias
+contra vulnerabilidades conocidas. Ejecutar desde la raíz del repositorio.
+
+**Imagen Docker del Orquestador** (SO base + binario):
+
+```bash
+docker build -t papersoul-orchestrator:local .
+grype papersoul-orchestrator:local
+```
+
+**Filesystem del proyecto Go** (dependencias de `go.mod`/`go.sum`):
+
+```bash
+grype dir:.
+```
+
+**SBOM existente** (si ya lo generaste con Syft u otra herramienta):
+
+```bash
+grype sbom:./sbom.json
+```
+
+Para que el comando falle solo con severidades altas (útil en CI), `--fail-on` devuelve
+código 2 cuando encuentra una vulnerabilidad de esa severidad o mayor:
+
+```bash
+grype papersoul-orchestrator:local --fail-on high
+```
+
+`grype db update` actualiza la base de vulnerabilidades antes de escanear.
+
 ## Operación
 
 - **Logs**: JSON a stdout (una línea por request: método, path, status, bytes, duración,
@@ -293,28 +450,51 @@ y el escaneo que verifica que ninguna ruta de producción escribe a disco.
 
 ## Pruebas de carga
 
-Los tests envían PDFs al endpoint `POST /api/v1/documents/process` en el campo multipart
-`file`. Ejecutar desde la raíz del repositorio, con el Orquestador y sus servicios
-downstream disponibles:
+Requieren `k6` y `vegeta` instalados en WSL, y Go para generar los cuerpos de Vegeta.
+Ejecutar desde la raíz del repositorio, con el stack levantado y accesible por Traefik.
+**No correr k6 y Vegeta al mismo tiempo.**
 
-```powershell
-k6 run tests/spike_tests.js
+### k6 — spike de 100 VUs
+
+```bash
+k6 run --out web-dashboard --insecure-skip-tls-verify \
+  -e ORCH_BASE_URL=https://127.0.0.1 \
+  -e ORCH_HOST_HEADER=orquestador.universidad.localhost \
+  tests/spike_tests.js
 ```
 
-La URL predeterminada es `http://localhost:8080`. Para k6 puede cambiarse mediante
-`ORCH_BASE_URL`, por ejemplo:
+- `ORCH_BASE_URL` por defecto es `http://localhost:8080` (acceso directo al proceso).
+- Contra el Traefik local se usa `https://127.0.0.1` y `ORCH_HOST_HEADER` para que el
+  router reciba el `Host` correcto; el default del script ya es
+  `orquestador.universidad.localhost`.
+- `--insecure-skip-tls-verify` es por el certificado wildcard local.
+- El dashboard queda en `http://localhost:5665/ui/`.
 
-```powershell
-$env:ORCH_BASE_URL = "https://orquestador.universidad.localhost"
-```
+### Vegeta — 50 req/s durante 30 s
 
-Vegeta consume un body estático por target. Antes de cada corrida, generar los cuerpos
-multipart a partir de los PDFs del profesor:
+Primero generar los cuerpos multipart a partir de los PDFs de `tests/stress/pdfs/`:
 
-```powershell
+```bash
+set -o pipefail
 go run ./tests/prepare_vegeta.go
-vegeta attack -targets=tests/test_carga.txt -duration=$env:VEGETA_DURATION -rate=$env:VEGETA_RATE | vegeta report
+
+RESULTS_DIR="/tmp/papersoul-vegeta-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RESULTS_DIR"
+
+vegeta attack -rate=50 -duration=30s -targets=tests/test_carga.txt \
+  -timeout=30s -insecure \
+  -connect-to=orquestador.universidad.localhost:443:127.0.0.1:443 \
+  | tee "$RESULTS_DIR/results.bin" | vegeta report
+
+vegeta report -type=json < "$RESULTS_DIR/results.bin" > "$RESULTS_DIR/report.json"
+vegeta plot < "$RESULTS_DIR/results.bin" > "$RESULTS_DIR/plot.html"
+echo "Resultados en: $RESULTS_DIR"
 ```
+
+- `tests/test_carga.txt` apunta a `https://orquestador.universidad.localhost`;
+  `-connect-to` redirige ese dominio a `127.0.0.1:443` sin depender del DNS.
+- `-insecure` acepta el certificado local.
+- Revisar `Success`, `Status Codes` y latencias del reporte.
 
 Los PDFs de entrada están en `tests/stress/pdfs/`. Los cuerpos generados se guardan en
 `tests/vegeta-generated/`, carpeta ignorada por Git.
@@ -336,9 +516,7 @@ Con 2 réplicas, Vegeta **supera** la referencia de cátedra (16,65 req/s, 66,53
 El throughput de k6 está limitado por la subida de los PDFs (hasta 8,9 MB) por el loopback
 Docker/WSL2, no por el Orquestador.
 
-
-Definir `VEGETA_DURATION` y `VEGETA_RATE` con los valores indicados por el profesor. Ambas
-herramientas ejercitan el endpoint del Orquestador.
+Ambas herramientas ejercitan el endpoint del Orquestador a través de Traefik.
 
 ## Cumplimiento de los 12 factores
 
