@@ -152,8 +152,7 @@ activemq-data/
 .envrc
 .venv
 
-# Compose local de desarrollo: no forma parte del entregable.
-docker-compose.dev.yml
+
 env/
 venv/
 ENV/

@@ -118,36 +118,51 @@ docker compose up -d --scale orchestrator=3
 con un mensaje explícito. Es requisito que exista la red `mired` (la crea el
 stack de Traefik); este Compose no la crea ni la elimina.
 
-Para probar el flujo completo en local hay un override opcional
-`docker-compose.dev.yml` (no versionado) que agrega Extractor y Persistencia a
-partir de sus imágenes ya construidas. El procedimiento completo —MongoDB, red
-`mired`, variables, build, verificación y teardown— está en
+Para probar el flujo completo en local está `docker-compose.dev.yml`, que agrega
+Extractor y Persistencia a partir de sus imágenes ya construidas. El procedimiento
+completo —MongoDB, red `mired`, variables, build, verificación y teardown— está en
 *Puesta en marcha local (flujo completo)*.
 
 ### Puesta en marcha local (flujo completo)
 
-Para probar el flujo real —Orquestador + Extractor + Persistencia + MongoDB, publicado
-por Traefik— en una máquina de desarrollo. Los comandos de Docker se ejecutan desde la
-raíz del repositorio en WSL/Linux; el `curl` se puede correr desde PowerShell o WSL.
+Para probar el flujo real —Traefik + MongoDB + Orquestador + Extractor + Persistencia—
+en una máquina de desarrollo. Los comandos de Docker se ejecutan desde la raíz del
+repositorio en WSL/Linux; el `curl` se puede correr desde PowerShell o WSL.
+
+El orden es: **Traefik → MongoDB → los 3 microservicios**.
 
 **Prerrequisitos**
 
 - Docker Engine con Compose v2.
-- El stack de Traefik del proyecto levantado (no forma parte de este repo): provee la
-  red `mired`, el puerto 443 y el certificado wildcard `*.universidad.localhost`.
-- MongoDB accesible desde `mired` como `mongodb:27017` (tampoco forma parte de este
-  repo; lo usa Persistencia, no el Orquestador).
-- `docker-compose.dev.yml` en la raíz. **No está versionado** (está en `.gitignore`):
-  si clonaste el repo no lo vas a tener; pedílo o recreálo con los servicios
-  `extractor` y `persistencia`.
+- Los stacks locales de Traefik y MongoDB (no forman parte de este repo). Traefik provee
+  la red `mired`, el puerto 443 y el certificado wildcard `*.universidad.localhost`;
+  MongoDB queda accesible como `mongodb:27017` (lo usa Persistencia, no el Orquestador).
+- `docker-compose.dev.yml` en la raíz: agrega los servicios `extractor` y
+  `persistencia` a partir de sus imágenes ya construidas.
 
-Si la red `mired` no existe:
+**1. Levantar la infraestructura**
+
+Ajustar las rutas a los stacks locales (`$HOME/docker/...` es la ubicación habitual en
+este entorno):
 
 ```bash
-docker network create mired
+export TRAEFIK_STACK="$HOME/docker/traefik"
+export MONGO_STACK="$HOME/docker/mongodb"
+
+# Red compartida (solo la primera vez)
+docker network create mired 2>/dev/null || true
+
+# 1.a Traefik: ruteo, TLS y healthcheck del balanceador
+(cd "$TRAEFIK_STACK" && docker compose up -d)
+
+# 1.b MongoDB: lo consume Persistencia
+(cd "$MONGO_STACK" && docker compose up -d)
 ```
 
-**1. Variables de entorno**
+Esperá a que MongoDB acepte conexiones antes de levantar Persistencia (si tarda,
+Persistencia reintenta). Si ya tenés ambos stacks levantados, saltá al paso 2.
+
+**2. Variables de entorno**
 
 ```bash
 cp .env.example .env
@@ -167,7 +182,7 @@ ORCH_REPLICAS=2
 `MONGODB_URI` lo consume el override local y está comentada en `.env.example`:
 descomentala y completá las credenciales.
 
-**2. Construir las imágenes**
+**3. Construir las imágenes**
 
 ```bash
 docker build -t papersoul-orchestrator:local .
@@ -175,18 +190,19 @@ docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
 docker build -t papersoul-persistencia:latest ../PaperSoul-Microservicio-Persistencia
 ```
 
-**3. Levantar el stack**
+**4. Levantar los 3 microservicios**
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
 ```
 
-Quedan las réplicas del Orquestador (`ORCH_REPLICAS`, default 2) más 3 de Extractor y
-3 de Persistencia. El Orquestador **no publica el 8080**: se llega únicamente por
-Traefik.
+Este comando levanta Orquestador + Extractor + Persistencia sobre la red `mired`; Traefik
+y MongoDB ya están arriba desde el paso 1. Quedan las réplicas del Orquestador
+(`ORCH_REPLICAS`, default 2) más 3 de Extractor y 3 de Persistencia. El Orquestador
+**no publica el 8080**: se llega únicamente por Traefik.
 
-**4. Verificar el liveness**
+**5. Verificar el liveness**
 
 El router público solo expone `/api/v1/documents/process`; `/health` se consulta
 dentro de la red (la imagen distroless no trae shell ni `curl`):
@@ -199,7 +215,7 @@ Respuesta esperada: `{"status":"ok"}`. La URL pública
 `https://orquestador.universidad.localhost/health` devuelve 404 a propósito: no hay
 router para ese path.
 
-**5. Probar el endpoint**
+**6. Probar el endpoint**
 
 Desde PowerShell (Windows):
 
@@ -222,13 +238,24 @@ curl -k -sS -X POST https://127.0.0.1/api/v1/documents/process \
 - La primera vez responde `PROCESSED`; si el PDF ya se procesó, `REUSED`. Para
   ejercitar el camino de extracción usá un PDF que todavía no hayas enviado.
 
-**6. Bajar el stack**
+**7. Bajar el stack**
 
 ```bash
+# Bajar los 3 microservicios
 docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+
+# Bajar la infraestructura (opcional)
+(cd "$HOME/docker/traefik" && docker compose down)
+(cd "$HOME/docker/mongodb" && docker compose down)
 ```
 
-MongoDB y Traefik se bajan desde sus propios stacks.
+**Secuencia resumida** (con `.env` e imágenes ya listas):
+
+```bash
+(cd "$HOME/docker/traefik" && docker compose up -d)
+(cd "$HOME/docker/mongodb" && docker compose up -d)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
 
 **Si algo falla**
 
