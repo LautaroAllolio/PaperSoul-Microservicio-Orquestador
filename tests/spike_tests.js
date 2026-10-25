@@ -13,6 +13,7 @@ export const options = {
 };
 
 const BASE_URL = __ENV.ORCH_BASE_URL || 'http://localhost:8080';
+const HOST_HEADER = __ENV.ORCH_HOST_HEADER || 'orquestador.universidad.localhost';
 const PROCESS_URL = `${BASE_URL}/api/v1/documents/process`;
 
 // k6 resuelve open() relativo a la ubicación de este script (tests/), no al CWD.
@@ -40,8 +41,9 @@ export default function () {
     const randomPdf = pdfFiles[Math.floor(Math.random() * pdfFiles.length)];
 
     const res = http.post(
-        PROCESS_URL,
-        { file: http.file(randomPdf.data, randomPdf.name, 'application/pdf') },
+    PROCESS_URL,
+    { file: http.file(randomPdf.data, randomPdf.name, 'application/pdf') },
+    { headers: { Host: HOST_HEADER } },
     );
 
     statusTrend.add(res.status);
