@@ -190,6 +190,12 @@ docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
 docker build -t papersoul-persistencia:latest ../PaperSoul-Microservicio-Persistencia
 ```
 
+El script `dev-up.sh` de la raíz solo construye las imágenes que **no existen**: si ya
+hay una con el mismo tag, la reutiliza. Después de traer cambios de código hay que
+forzar el rebuild (`./dev-up.sh --rebuild`) o reconstruir a mano el servicio que
+cambió. Una imagen vieja responde con un contrato viejo aunque el código en disco ya
+esté corregido.
+
 **4. Levantar los 3 microservicios**
 
 ```bash
@@ -237,6 +243,9 @@ curl -k -sS -X POST https://127.0.0.1/api/v1/documents/process \
 - `Host` es el que usa el router de Traefik; sin ese header la respuesta es 404.
 - La primera vez responde `PROCESSED`; si el PDF ya se procesó, `REUSED`. Para
   ejercitar el camino de extracción usá un PDF que todavía no hayas enviado.
+
+Lo mismo se puede hacer desde Postman con la colección de [`postman/`](postman/README.md):
+entorno *Traefik*, header `Host` y verificación SSL desactivada.
 
 **7. Bajar el stack**
 
@@ -395,6 +404,17 @@ curl -sS -X POST http://localhost:8080/api/v1/documents/process -F "file=@factur
 curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8080/api/v1/nada
 curl -si http://localhost:8080/api/v1/documents/process | head -1
 ```
+
+### Postman
+
+La colección y los entornos están en [`postman/`](postman/README.md). Incluye:
+
+- **Procesar PDF**: el flujo completo; hay que seleccionar el archivo en `Body → form-data → file`.
+- **PDF inválido (422)** y **Sin campo file (400)**: casos de error determinísticos, sin elegir archivo.
+
+Para el stack de Compose se usa el entorno *Traefik* (`https://127.0.0.1` + header
+`Host: orquestador.universidad.localhost`) y se desactiva la verificación SSL. Para
+`go run` alcanza con el entorno *Local directo* (`http://localhost:8080`).
 
 ## Desarrollo
 

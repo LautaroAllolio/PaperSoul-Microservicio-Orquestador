@@ -1,0 +1,287 @@
+{
+  "info": {
+    "_postman_id": "8d009406-5d98-405f-899f-f4768593dc4d",
+    "name": "PaperSoul — Orquestador",
+    "description": "Colección para probar el Orquestador de PaperSoul sin usar curl.\n\nLos valores por defecto apuntan al stack de Compose detrás de Traefik: `https://127.0.0.1` y el header `Host: orquestador.universidad.localhost`. Así funciona incluso sin seleccionar un entorno.\n\nEntornos incluidos:\n- `PaperSoul — Traefik (127.0.0.1 + Host)` para el stack de Compose (recomendado).\n- `PaperSoul — Local directo (:8080)` para `go run ./cmd/orchestrator` o un contenedor con el puerto publicado.\n\nEl request `Procesar PDF` necesita que se seleccione un archivo en **Body → form-data → file**. Postman guarda la ruta absoluta del archivo: si la colección se comparte, cada persona debe volver a elegirlo.\n\nPara Traefik hay que desactivar **Settings → General → SSL certificate verification** por el certificado wildcard local.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Documentos",
+      "description": "Requests contra POST /api/v1/documents/process.",
+      "item": [
+        {
+          "name": "Procesar PDF",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const filePart = pm.request.body.formdata.all().find(function (part) {",
+                  "  return part.key === \"file\";",
+                  "});",
+                  "const fileSrc = filePart && filePart.src;",
+                  "const hasFile = Array.isArray(fileSrc) ? fileSrc.length > 0 && Boolean(fileSrc[0]) : Boolean(fileSrc);",
+                  "",
+                  "if (!hasFile) {",
+                  "  pm.test(\"PDF seleccionado en Body → form-data → file\", function () {",
+                  "    pm.expect(hasFile, \"Seleccioná un PDF en Body → form-data → file antes de enviar\").to.be.true;",
+                  "  });",
+                  "  return;",
+                  "}",
+                  "",
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Content-Type application/json\", function () {",
+                  "  pm.response.to.have.header(\"Content-Type\", \"application/json\");",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"status PROCESSED o REUSED\", function () {",
+                  "  pm.expect([\"PROCESSED\", \"REUSED\"]).to.include(body.status);",
+                  "});",
+                  "",
+                  "pm.test(\"documentId no vacío\", function () {",
+                  "  pm.expect(body.documentId).to.be.a(\"string\");",
+                  "  pm.expect(body.documentId.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test(\"checksum SHA-256 en hexadecimal\", function () {",
+                  "  pm.expect(body.checksum).to.match(/^[a-f0-9]{64}$/);",
+                  "});",
+                  "",
+                  "pm.test(\"metadata.fileName no vacío\", function () {",
+                  "  pm.expect(body.metadata.fileName, \"fileName\").to.be.a(\"string\");",
+                  "  pm.expect(body.metadata.fileName.length, \"fileName\").to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test(\"metadata.sizeBytes mayor a 0\", function () {",
+                  "  pm.expect(body.metadata.sizeBytes, \"sizeBytes\").to.be.a(\"number\");",
+                  "  pm.expect(body.metadata.sizeBytes, \"sizeBytes\").to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test(\"metadata.pageCount al menos 1\", function () {",
+                  "  pm.expect(body.metadata.pageCount, \"pageCount\").to.be.a(\"number\");",
+                  "  pm.expect(body.metadata.pageCount, \"pageCount\").to.be.at.least(1);",
+                  "});",
+                  "",
+                  "pm.test(\"metadata.encrypted es boolean\", function () {",
+                  "  pm.expect(body.metadata.encrypted, \"encrypted\").to.be.a(\"boolean\");",
+                  "});",
+                  "",
+                  "const correlationId = pm.response.headers.get(\"X-Correlation-Id\");",
+                  "pm.test(\"X-Correlation-Id en la respuesta\", function () {",
+                  "  pm.expect(correlationId).to.be.a(\"string\");",
+                  "  pm.expect(correlationId.length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Host",
+                "value": "{{hostHeader}}",
+                "type": "text",
+                "description": "El entorno lo define. Es el header que usa el router de Traefik cuando la URL apunta a 127.0.0.1."
+              },
+              {
+                "key": "X-Correlation-Id",
+                "value": "{{$guid}}",
+                "type": "text",
+                "description": "Opcional. Si se envía, debe ser un UUID RFC 4122; el servidor lo refleja en la respuesta y en los logs."
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "contentType": "application/pdf",
+                  "description": "Seleccionar un PDF (máx. 25 MiB)."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/documents/process",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "process"
+              ]
+            },
+            "description": "Envía un PDF y ejecuta el flujo completo: validación, deduplicación por checksum, extracción y persistencia.\n\nAntes de enviar: **Body → form-data → file → Select File**. No agregar `Content-Type` a mano; Postman arma el boundary del multipart.\n\nLa primera vez responde `PROCESSED`; si se repite el mismo PDF, `REUSED`."
+          },
+          "response": []
+        },
+        {
+          "name": "PDF inválido (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"422 Unprocessable Entity\", function () {",
+                  "  pm.response.to.have.status(422);",
+                  "});",
+                  "",
+                  "pm.test(\"Content-Type application/problem+json\", function () {",
+                  "  pm.response.to.have.header(\"Content-Type\", \"application/problem+json\");",
+                  "});",
+                  "",
+                  "const problem = pm.response.json();",
+                  "",
+                  "pm.test(\"type invalid-pdf-header\", function () {",
+                  "  pm.expect(problem.type).to.eql(\"urn:papersoul:orchestrator:invalid-pdf-header\");",
+                  "});",
+                  "",
+                  "pm.test(\"invalid_params file=invalid_magic_bytes\", function () {",
+                  "  pm.expect(problem.invalid_params).to.deep.include({ name: \"file\", reason: \"invalid_magic_bytes\" });",
+                  "});",
+                  "",
+                  "pm.test(\"instance con correlation id\", function () {",
+                  "  pm.expect(problem.instance).to.match(/^urn:uuid:[0-9a-f-]{36}$/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Host",
+                "value": "{{hostHeader}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Correlation-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "text",
+                  "value": "esto no es un PDF",
+                  "description": "No hace falta elegir archivo: el servidor lee el part file y rechaza el magic bytes."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/documents/process",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "process"
+              ]
+            },
+            "description": "Caso determinístico de error: manda un campo `file` de texto en vez de un binario. El borde valida `%PDF-` antes de bufferizar y responde 422."
+          },
+          "response": []
+        },
+        {
+          "name": "Sin campo file (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 Bad Request\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"Content-Type application/problem+json\", function () {",
+                  "  pm.response.to.have.header(\"Content-Type\", \"application/problem+json\");",
+                  "});",
+                  "",
+                  "const problem = pm.response.json();",
+                  "",
+                  "pm.test(\"type invalid-multipart\", function () {",
+                  "  pm.expect(problem.type).to.eql(\"urn:papersoul:orchestrator:invalid-multipart\");",
+                  "});",
+                  "",
+                  "pm.test(\"invalid_params file=required\", function () {",
+                  "  pm.expect(problem.invalid_params).to.deep.include({ name: \"file\", reason: \"required\" });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Host",
+                "value": "{{hostHeader}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Correlation-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "otro",
+                  "type": "text",
+                  "value": "no es el campo file"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/documents/process",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "process"
+              ]
+            },
+            "description": "Caso determinístico de error: envía un multipart sin el campo `file`. Responde 400 con `invalid_params: file=required`."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://127.0.0.1",
+      "type": "string"
+    },
+    {
+      "key": "hostHeader",
+      "value": "orquestador.universidad.localhost",
+      "type": "string"
+    }
+  ]
+}
