@@ -19,13 +19,13 @@ const (
 
 // Extractor es el adapter HTTP hacia el microservicio de Extracción.
 type Extractor struct {
-	baseURL string
-	http    *http.Client
+	resolver Resolver
+	http     *http.Client
 }
 
 // NewExtractor arma el client del Extractor.
 func NewExtractor(opts Options) *Extractor {
-	return &Extractor{baseURL: baseURL(opts.BaseURL), http: newHTTPClient(opts.Timeout)}
+	return &Extractor{resolver: opts.Resolver, http: newHTTPClient(opts.Timeout)}
 }
 
 // Extract reenvía el binario —que ya está en memoria— al Extractor por
@@ -35,29 +35,14 @@ func (e *Extractor) Extract(ctx context.Context, in domain.ExtractRequest) (*dom
 	if in.File == nil {
 		return nil, errorsvc.ErrInternal
 	}
-	// El reader es de un solo dueño por request, pero el checksum y la validación
-	// pdfcpu ya lo recorrieron: siempre arrancamos desde el principio.
-	if _, err := in.File.Seek(0, io.SeekStart); err != nil {
-		return nil, internalError(err)
-	}
 
-	body, contentType, totalLen, err := NewMultipartPipe(in.File, in.FileName, in.Checksum, in.Size)
+	resp, err := sendResolved(ctx, e.resolver, ServiceExtractor, e.http,
+		errorsvc.ErrExtractorTimeout, errorsvc.ErrExtractorUnavailable,
+		func(base string) (*http.Request, error) {
+			return newExtractHTTPRequest(ctx, base, in)
+		})
 	if err != nil {
-		return nil, internalError(err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+extractionsPath, body)
-	if err != nil {
-		return nil, internalError(err)
-	}
-	req.ContentLength = totalLen // evita transfer-chunked
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set(headerDocumentChecksum, in.Checksum)
-	setCommonHeaders(req, ctx)
-
-	resp, err := e.http.Do(req)
-	if err != nil {
-		return nil, transportError(errorsvc.ErrExtractorTimeout, errorsvc.ErrExtractorUnavailable, err)
+		return nil, err
 	}
 	if !is2xx(resp.StatusCode) {
 		return nil, downstreamStatusError(extractStatusSentinel(resp.StatusCode), resp)
@@ -72,6 +57,32 @@ func (e *Extractor) Extract(ctx context.Context, in domain.ExtractRequest) (*dom
 		return nil, fmt.Errorf("%w: %v", errorsvc.ErrExtractorInvalidResponse, err)
 	}
 	return &out, nil
+}
+
+// newExtractHTTPRequest arma el request multipart. Es una función aparte porque
+// el reintento por dial necesita reconstruirlo completo: el pipe anterior ya se
+// consumió y el reader del binario quedó avanzado.
+func newExtractHTTPRequest(ctx context.Context, base string, in domain.ExtractRequest) (*http.Request, error) {
+	// El reader es de un solo dueño por request, pero el checksum y la validación
+	// pdfcpu ya lo recorrieron: siempre arrancamos desde el principio.
+	if _, err := in.File.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	body, contentType, totalLen, err := NewMultipartPipe(in.File, in.FileName, in.Checksum, in.Size)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+extractionsPath, body)
+	if err != nil {
+		return nil, err
+	}
+	req.ContentLength = totalLen // evita transfer-chunked
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set(headerDocumentChecksum, in.Checksum)
+	setCommonHeaders(req, ctx)
+	return req, nil
 }
 
 // extractStatusSentinel decide qué significa el status de un 2xx que no llegó:

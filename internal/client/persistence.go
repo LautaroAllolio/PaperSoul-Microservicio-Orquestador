@@ -20,28 +20,31 @@ const (
 
 // Persistence es el adapter HTTP hacia el microservicio de Persistencia.
 type Persistence struct {
-	baseURL string
-	http    *http.Client
+	resolver Resolver
+	http     *http.Client
 }
 
 // NewPersistence arma el client de Persistencia.
 func NewPersistence(opts Options) *Persistence {
-	return &Persistence{baseURL: baseURL(opts.BaseURL), http: newHTTPClient(opts.Timeout)}
+	return &Persistence{resolver: opts.Resolver, http: newHTTPClient(opts.Timeout)}
 }
 
 // FindByChecksum busca un documento por el SHA-256 de su binario. Es el primer
 // paso del dedup: devuelve ErrDocumentNotFound cuando el checksum es nuevo, un
 // sentinel de control de flujo que el orquestador nunca expone al cliente.
 func (p *Persistence) FindByChecksum(ctx context.Context, checksum string) (*domain.StoredDocumentResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+byChecksumPath+url.PathEscape(checksum), nil)
+	resp, err := sendResolved(ctx, p.resolver, ServicePersistence, p.http,
+		errorsvc.ErrPersistenceTimeout, errorsvc.ErrPersistenceUnavailable,
+		func(base string) (*http.Request, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+byChecksumPath+url.PathEscape(checksum), nil)
+			if err != nil {
+				return nil, err
+			}
+			setCommonHeaders(req, ctx)
+			return req, nil
+		})
 	if err != nil {
-		return nil, internalError(err)
-	}
-	setCommonHeaders(req, ctx)
-
-	resp, err := p.http.Do(req)
-	if err != nil {
-		return nil, transportError(errorsvc.ErrPersistenceTimeout, errorsvc.ErrPersistenceUnavailable, err)
+		return nil, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		drainAndClose(resp)
@@ -70,17 +73,21 @@ func (p *Persistence) Store(ctx context.Context, in domain.StoreDocumentRequest)
 		return nil, internalError(err)
 	}
 
-	// bytes.Reader ⇒ http.NewRequest calcula ContentLength solo (sin chunked).
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+documentsPath, bytes.NewReader(payload))
+	resp, err := sendResolved(ctx, p.resolver, ServicePersistence, p.http,
+		errorsvc.ErrPersistenceTimeout, errorsvc.ErrPersistenceUnavailable,
+		func(base string) (*http.Request, error) {
+			// bytes.Reader ⇒ http.NewRequest calcula ContentLength solo (sin chunked).
+			// Se crea uno nuevo en cada intento porque el anterior queda consumido.
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+documentsPath, bytes.NewReader(payload))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			setCommonHeaders(req, ctx)
+			return req, nil
+		})
 	if err != nil {
-		return nil, internalError(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	setCommonHeaders(req, ctx)
-
-	resp, err := p.http.Do(req)
-	if err != nil {
-		return nil, transportError(errorsvc.ErrPersistenceTimeout, errorsvc.ErrPersistenceUnavailable, err)
+		return nil, err
 	}
 	if resp.StatusCode == http.StatusConflict {
 		drainAndClose(resp)

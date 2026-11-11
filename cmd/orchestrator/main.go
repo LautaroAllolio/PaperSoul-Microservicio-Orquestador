@@ -18,6 +18,7 @@ import (
 	"github.com/papersoul/orchestrator/internal/client"
 	"github.com/papersoul/orchestrator/internal/handler"
 	"github.com/papersoul/orchestrator/internal/platform/config"
+	"github.com/papersoul/orchestrator/internal/platform/discovery"
 	"github.com/papersoul/orchestrator/internal/platform/pdf"
 	"github.com/papersoul/orchestrator/internal/service"
 )
@@ -48,8 +49,13 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("configuración inválida: %w", err)
 	}
 
-	extractor := client.NewExtractor(client.Options{BaseURL: cfg.ExtractorURL, Timeout: cfg.ExtractorTimeout})
-	persistence := client.NewPersistence(client.Options{BaseURL: cfg.PersistenceURL, Timeout: cfg.PersistenceTimeout})
+	resolver, err := newResolver(cfg)
+	if err != nil {
+		return fmt.Errorf("descubrimiento inválido: %w", err)
+	}
+
+	extractor := client.NewExtractor(client.Options{Resolver: resolver, Timeout: cfg.ExtractorTimeout})
+	persistence := client.NewPersistence(client.Options{Resolver: resolver, Timeout: cfg.PersistenceTimeout})
 	orchestrator := service.NewOrchestrator(extractor, persistence, pdf.New(cfg.ValidationRelaxed))
 
 	srv := newServer(handler.NewRouter(orchestrator, cfg, logger))
@@ -65,6 +71,8 @@ func run(logger *slog.Logger) error {
 	logger.Info("orquestador escuchando",
 		"addr", ln.Addr().String(),
 		"max_concurrency", cfg.MaxConcurrency,
+		"discovery", cfg.Discovery,
+		"consul", cfg.ConsulHTTPAddr,
 		"extractor", cfg.ExtractorURL,
 		"persistence", cfg.PersistenceURL,
 		// En milisegundos y no como time.Duration: el handler JSON de slog
@@ -80,6 +88,19 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("cierre graceful completo")
 	return nil
+}
+
+// newResolver elige la implementación de descubrimiento según DISCOVERY. El
+// modo se decide solo por configuración: nunca hay fallback en runtime.
+func newResolver(cfg config.Config) (client.Resolver, error) {
+	switch cfg.Discovery {
+	case "static":
+		return discovery.NewStatic(cfg.ExtractorURL, cfg.PersistenceURL), nil
+	case "consul":
+		return discovery.NewConsul(discovery.ConsulOptions{Address: cfg.ConsulHTTPAddr})
+	default:
+		return nil, fmt.Errorf("DISCOVERY desconocido %q", cfg.Discovery)
+	}
 }
 
 func newServer(h http.Handler) *http.Server {

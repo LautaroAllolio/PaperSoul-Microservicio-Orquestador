@@ -22,11 +22,80 @@ const maxDownstreamErrorBody = 4 << 10
 
 // Options son los parámetros de construcción de un client HTTP downstream.
 type Options struct {
-	// BaseURL es la raíz del microservicio, sin path (ej. "http://extractor:8000").
-	BaseURL string
+	// Resolver entrega la base URL de una instancia sana del servicio. Puede ser
+	// Consul (descubrimiento dinámico) o estático (URLs fijas).
+	Resolver Resolver
 	// Timeout es el deadline de la llamada completa (conexión, escritura del body
 	// y lectura de la respuesta). Si es 0, el deadline es el del contexto.
 	Timeout time.Duration
+}
+
+// sendResolved resuelve una instancia, arma el request con build y lo envía.
+//
+// Si el envío falla al establecer la conexión (dial), la petición nunca salió:
+// se resuelve otra instancia, se reconstruye el request y se intenta una sola
+// vez más. Cualquier otro error —timeout, respuesta HTTP o error posterior al
+// envío— no se reintenta, porque el downstream pudo haber procesado la
+// petición y repetirla rompería la semántica de un POST.
+func sendResolved(
+	ctx context.Context,
+	resolver Resolver,
+	service string,
+	httpClient *http.Client,
+	timeoutSentinel, unavailableSentinel error,
+	build func(baseURL string) (*http.Request, error),
+) (*http.Response, error) {
+	base, err := resolve(ctx, resolver, service, unavailableSentinel)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := build(base)
+	if err != nil {
+		return nil, internalError(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	if !isDialError(err) {
+		return nil, transportError(timeoutSentinel, unavailableSentinel, err)
+	}
+
+	base, err = resolve(ctx, resolver, service, unavailableSentinel)
+	if err != nil {
+		return nil, err
+	}
+	req, err = build(base)
+	if err != nil {
+		return nil, internalError(err)
+	}
+	resp, err = httpClient.Do(req)
+	if err != nil {
+		return nil, transportError(timeoutSentinel, unavailableSentinel, err)
+	}
+	return resp, nil
+}
+
+// resolve consulta el resolver y normaliza la URL. Un fallo de descubrimiento
+// es "servicio no disponible" (502), no un timeout de la llamada downstream.
+func resolve(ctx context.Context, resolver Resolver, service string, unavailableSentinel error) (string, error) {
+	if resolver == nil {
+		return "", fmt.Errorf("%w: client sin resolver configurado", unavailableSentinel)
+	}
+	raw, err := resolver.Resolve(ctx, service)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", unavailableSentinel, err)
+	}
+	return baseURL(raw), nil
+}
+
+// isDialError distingue el fallo al establecer la conexión (la petición nunca
+// salió) de un error posterior al envío. http.Client envuelve el error del
+// transporte en *url.Error, y el dial aparece como *net.OpError con Op "dial".
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // newHTTPClient arma el http.Client compartido por los clients.
