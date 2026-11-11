@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,9 @@ const (
 	defaultExtractorTimeout   = 30 * time.Second
 	defaultPersistenceTimeout = 15 * time.Second
 	defaultShutdownTimeout    = 10 * time.Second
+	// defaultDiscovery es static: go run, tests e integración siguen
+	// funcionando sin Consul. Los Compose fijan DISCOVERY=consul.
+	defaultDiscovery = "static"
 )
 
 type Config struct {
@@ -30,6 +34,13 @@ type Config struct {
 	PersistenceURL     string
 	PersistenceTimeout time.Duration
 	ShutdownTimeout    time.Duration
+	// Discovery elige cómo se encuentran los downstream: "consul" o "static".
+	Discovery string
+	// ConsulHTTPAddr es la base de la API HTTP de Consul. Requerida en modo consul.
+	ConsulHTTPAddr string
+	// AdvertiseAddr fuerza la IP con la que la instancia se registra en Consul.
+	// Vacía = autodetección de la primera IPv4 no loopback.
+	AdvertiseAddr string
 }
 
 func Load() (Config, error) {
@@ -61,11 +72,7 @@ func Load() (Config, error) {
 	}
 	cfg.MaxConcurrency = maxConcurrency
 
-	extractorURL := envOr("EXTRACTOR_URL", "")
-	if extractorURL == "" {
-		errs = append(errs, requiredError("EXTRACTOR_URL"))
-	}
-	cfg.ExtractorURL = extractorURL
+	cfg.ExtractorURL = envOr("EXTRACTOR_URL", "")
 
 	extractorTimeout, err := parseDuration("EXTRACTOR_TIMEOUT", defaultExtractorTimeout)
 	if err != nil {
@@ -73,11 +80,7 @@ func Load() (Config, error) {
 	}
 	cfg.ExtractorTimeout = extractorTimeout
 
-	persistenceURL := envOr("PERSISTENCE_URL", "")
-	if persistenceURL == "" {
-		errs = append(errs, requiredError("PERSISTENCE_URL"))
-	}
-	cfg.PersistenceURL = persistenceURL
+	cfg.PersistenceURL = envOr("PERSISTENCE_URL", "")
 
 	persistenceTimeout, err := parseDuration("PERSISTENCE_TIMEOUT", defaultPersistenceTimeout)
 	if err != nil {
@@ -90,6 +93,27 @@ func Load() (Config, error) {
 		errs = append(errs, err)
 	}
 	cfg.ShutdownTimeout = shutdownTimeout
+
+	cfg.Discovery = strings.ToLower(strings.TrimSpace(envOr("DISCOVERY", defaultDiscovery)))
+	cfg.ConsulHTTPAddr = envOr("CONSUL_HTTP_ADDR", "")
+	cfg.AdvertiseAddr = envOr("ORCH_ADVERTISE_ADDR", "")
+
+	switch cfg.Discovery {
+	case "static":
+		// Las URLs fijas son la fuente de verdad del modo estático.
+		if cfg.ExtractorURL == "" {
+			errs = append(errs, requiredError("EXTRACTOR_URL"))
+		}
+		if cfg.PersistenceURL == "" {
+			errs = append(errs, requiredError("PERSISTENCE_URL"))
+		}
+	case "consul":
+		if cfg.ConsulHTTPAddr == "" {
+			errs = append(errs, requiredError("CONSUL_HTTP_ADDR"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("DISCOVERY: valor inválido %q (use \"consul\" o \"static\")", cfg.Discovery))
+	}
 
 	if cfg.MaxFileSize <= 0 {
 		errs = append(errs, fmt.Errorf("ORCH_MAX_FILE_SIZE debe ser > 0, got %d", cfg.MaxFileSize))

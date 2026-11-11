@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/pdfcpu/pdfcpu v0.15.0
 	go.yaml.in/yaml/v3 v3.0.5
+	golang.org/x/sync v0.25.0
 )
 
 require (
