@@ -20,7 +20,9 @@ reescribirán los scripts de estrés del profesor.
   graceful.
 - Hay límites de tamaño y concurrencia por proceso; la deduplicación por checksum hace
   seguro repetir el procesamiento del mismo documento bajo el contrato actual.
-- El repositorio del Orquestador no contiene Dockerfile ni Compose propios.
+- El repositorio del Orquestador ya incluye `Dockerfile`, `docker-compose.yml` y un
+  override local (`docker-compose.dev.yml`); la imagen se construye/publica aparte y el
+  Compose la referencia por versión (`ORCH_IMAGE`), sin `build:`.
 - El Orquestador expone `GET /health` como liveness (no readiness): responde 200 mientras
   atiende HTTP y no consulta Extracción ni Persistencia.
 - El README existente describe el contrato de la API y su operación local.
@@ -35,8 +37,10 @@ reescribirán los scripts de estrés del profesor.
 
 - El Orquestador se construye y ejecuta como contenedor propio. Su Compose, si se usa,
   definirá solo el Orquestador; Traefik se ejecutará y desplegará por separado.
-- Traefik descubrirá las instancias del Orquestador a través de una red externa compartida.
-  La configuración del Orquestador no creará ni administrará esa red o el proceso Traefik.
+- Traefik descubrirá las instancias del Orquestador por el **Consul Catalog** sobre una red
+  externa compartida: el Orquestador se registra con tags `traefik.*` y Traefik lo descubre
+  por polling. La configuración del Orquestador no creará ni administrará esa red, Consul ni
+  el proceso Traefik.
 - La API se publica como **HTTP sobre TCP**. Confirmado: el proceso abre un listener
   `net.Listen("tcp", ORCH_ADDR)` (`cmd/orchestrator/main.go`) y no existe ningún listener
   UDP. Traefik puede enrutar UDP, pero ese requerimiento **no aplica** al Orquestador.
@@ -47,10 +51,11 @@ reescribirán los scripts de estrés del profesor.
   puede excluirla de solicitudes posteriores; no se asumirá que Traefik siempre repite una
   solicitud fallida en otra instancia.
 - Política de reintento/circuit breaker acordada (ver *Contrato de despliegue*): reintentar
-  **solo** cuando el backend no responde (fallo de conexión/sin respuesta), **2 reintentos**
-  (`attempts=2`) con `initialInterval` de **500 ms**. Traefik v3.5 no reintenta `5xx` ni
-  `POST` con cuerpo, así que esto no garantiza reejecución en otra instancia; la deduplicación
-  por checksum deja el endpoint idempotente y seguro para reintentos del cliente.
+  **solo** cuando el backend no responde (error de **dial**: la conexión no llegó a enviar
+  bytes), con `attempts=2` —**2 intentos totales, 1 reintento**— e `initialInterval` de
+  **500 ms**. Traefik **no** reintenta respuestas `5xx`/`503` en `POST` sin
+  `retryNonIdempotentMethod` ni bufferizar el body; la deduplicación por checksum deja el
+  endpoint idempotente y seguro para reintentos del cliente.
 - Los cuatro PDFs originales se conservan. Los archivos de carga se adaptan para probar el
   contrato del Orquestador, y Vegeta recibe cuerpos multipart generados bajo demanda sin
   duplicar ni transformar permanentemente esos PDFs.
@@ -65,13 +70,13 @@ en las tareas que los consumen.
 | Aspecto | Decisión |
 |---|---|
 | Protocolo de la API | HTTP/1.1 sobre TCP. Sin UDP. |
-| Descubrimiento Traefik | Docker provider (labels en el contenedor). |
+| Descubrimiento Traefik | **Consul Catalog** con `exposedByDefault: false` y `refreshInterval: 5s`; el Orquestador se registra con tags `traefik.*` (incluida `traefik.enable=true`). El Docker provider queda solo para la UI de Consul, no para esta app. |
 | Red compartida | Externa, nombre **`mired`**; se referencia con `external: true` y el Compose no la crea ni la administra. |
 | Puerto interno | **8080** (`ORCH_ADDR`). No se publica al host por defecto; lo expone Traefik. |
 | Host/path enrutado | **`orquestador.universidad.localhost`** → **`/api/v1/documents/process`**, por el **entrypoint `https`**. |
 | TLS | `tls=true` sin certresolver: el Traefik existente sirve su certificado estático (wildcard `*.universidad.localhost`) desde el default TLS store. |
 | Health check | `GET /health` como liveness (sin readiness); en el balanceador: `interval=10s`, `timeout=3s`. |
-| Retry | Lo que ofrece Traefik v3.5: reintenta solo cuando el backend no responde (fallo de conexión/sin respuesta). **2 reintentos** (`attempts=2`, es decir 3 requests) con `initialInterval=500 ms`. v3.5 **no** reintenta respuestas `5xx` (no existe el campo `status`) ni `POST` con cuerpo (no existe `retryNonIdempotentMethod`); por eso esto **no** garantiza reejecución en otra instancia. |
+| Retry | Reintenta solo un **error de dial** (la conexión no llegó a enviar bytes), también para `POST`, y elige otra instancia si la hay. `attempts=2` = **2 intentos totales (1 reintento)** con `initialInterval=500 ms`. **No** reintenta respuestas `5xx`/`503`: eso exigiría `retryNonIdempotentMethod=true` y bufferizar el body (`maxRequestBodyBytes`, 2 MB por defecto), descartado por el tamaño de los PDFs. No se promete reejecución en otra instancia ante un `5xx`. |
 | Circuit breaker / réplica caída | Traefik deja de enviar tráfico a la instancia que falla su liveness. No se promete failover ni reejecución en otra instancia. |
 
 ## Criterios de aceptación de carga (benchmark de cátedra)
@@ -193,8 +198,8 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
 | Se requiere UDP para una API que hoy es HTTP/TCP | Configuración incompatible o ruta que no funciona | **Resuelto:** la API es HTTP/TCP y no se requiere UDP. |
-| Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Retry acotado al backend sin respuesta (2 reintentos, 500 ms; Traefik v3.5 no reintenta 5xx ni POST con cuerpo); una réplica que falla su liveness se excluye del balanceo y no se promete reejecución en otra instancia. |
-| Traefik y Orquestador no comparten red o proveedor de descubrimiento | Traefik no alcanza las réplicas | Usar Docker provider y la red externa `mired` sin crear otro Traefik. |
+| Confundir reintentos con failover/circuit breaker | Solicitudes POST duplicadas o no repetidas como se espera | Retry acotado al error de dial (`attempts=2` = 2 intentos totales, 500 ms); no reintenta `5xx`/`503` en `POST`. Una réplica que falla su liveness se excluye del balanceo y no se promete reejecución en otra instancia. |
+| Traefik y Orquestador no comparten red o proveedor de descubrimiento | Traefik no alcanza las réplicas | Registrar el Orquestador en Consul con tags `traefik.*` y usar la red externa `mired` sin crear otro Traefik. |
 | `/health` confirma liveness, no disponibilidad de los downstream | Una instancia viva podría no poder completar procesamiento si falla una dependencia | Mantenerlo como liveness por decisión acordada; registrar métricas/errores downstream por separado y no interpretarlo como readiness. |
 | No se especifican umbrales de rendimiento | No se puede concluir objetivamente si una corrida aprueba | **Resuelto:** umbrales provistos por la cátedra (ver *Criterios de aceptación de carga*). |
 
@@ -203,12 +208,12 @@ usuario revise el plan y se resuelvan las preguntas abiertas relevantes.
 Resueltas en la Tarea 1:
 
 - **UDP:** no aplica; la API es HTTP sobre TCP y no hay listener UDP.
-- **Retry / failover:** reintentar solo cuando el backend no responde (Traefik v3.5 no
-  reintenta `5xx` ni `POST` con cuerpo), hasta 2 reintentos con `initialInterval` de 500 ms;
-  una réplica no saludable se excluye del balanceo y no se asume reejecución en otra instancia.
-- **Traefik:** Docker provider, red externa `mired`, host `orquestador.universidad.localhost`
-  por el entrypoint `https` (TLS estático del default TLS store) y path
-  `/api/v1/documents/process`.
+- **Retry / failover:** reintentar solo un error de dial, con `attempts=2` (2 intentos
+  totales) e `initialInterval` de 500 ms; no se reintentan `5xx`/`503` en `POST`. Una réplica
+  no saludable se excluye del balanceo y no se asume reejecución en otra instancia.
+- **Traefik:** Consul Catalog (tags `traefik.*`), red externa `mired`, host
+  `orquestador.universidad.localhost` por el entrypoint `https` (TLS estático del default TLS
+  store) y path `/api/v1/documents/process`.
 - **Umbrales:** provistos por la cátedra (ver *Criterios de aceptación de carga*).
 
 Resuelto:

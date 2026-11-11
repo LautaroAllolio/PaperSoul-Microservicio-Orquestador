@@ -12,6 +12,23 @@ Colección para probar el flujo completo del Orquestador sin usar `curl`.
 
 Usar **Postman Desktop**: la versión web no permite seleccionar archivos locales.
 
+## Estado del stack (Consul)
+
+El Compose levanta el Orquestador con `DISCOVERY=consul`: las réplicas se registran en
+Consul y Traefik las descubre por el **Consul Catalog**. Para el happy path, Extractor y
+Persistencia también tienen que estar registrados en Consul (lo implementan sus repos).
+
+Mientras eso no ocurra, los dos casos de error (400 y 422) funcionan igual —fallan antes de
+llamar a los downstream—, pero **Procesar PDF** devuelve `502`:
+
+| Situación | Respuesta esperada |
+|---|---|
+| Extractor/Persistencia **no** registrados en Consul | `502 persistence-unavailable` (o `extractor-unavailable`). |
+| Ambos registrados y `passing` | `200` con `PROCESSED` (o `REUSED` si ya se procesó). |
+
+Si el 502 aparece con el catálogo ya poblado, revisá `docker compose logs orchestrator` y que
+el check de Consul apunte al puerto correcto.
+
 ## Importar
 
 1. Abrir Postman.
@@ -95,8 +112,8 @@ Ambos verifican `Content-Type: application/problem+json` y el `correlation id` e
 | `ECONNREFUSED 127.0.0.1:8080` | Está seleccionado el entorno *Local directo*, pero el stack de Compose no publica el 8080. | Seleccionar el entorno *Traefik* o quitar el entorno para usar el default. |
 | `404 page not found` (texto plano) | Llegó a Traefik sin el header `Host`. | Verificar que el header `Host` esté habilitado y que el entorno *Traefik* esté seleccionado. Si Postman lo ignora, usar la opción del archivo `hosts` de abajo. |
 | `SSL Error: Self-signed certificate` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE` | Verificación SSL activada. | **Settings → General → SSL certificate verification → OFF**. |
-| `502 persistence-unavailable` | MongoDB o Persistencia no están listos. | `./dev-up.sh` desde la raíz del proyecto y reintentar. |
-| Falla *metadata.fileName no vacío* o *metadata.pageCount al menos 1*, pero `sizeBytes` es correcto | La imagen de Persistencia que está corriendo no devuelve `filename` ni `page_count` en el `201` (imagen vieja). | Reconstruir Persistencia: `./dev-up.sh --rebuild` o `docker build -t papersoul-persistencia:latest PaperSoul-Microservicio-Persistencia` y recrear el servicio. |
+| `502 persistence-unavailable` | MongoDB o Persistencia no están listos, o Persistencia no está registrada en Consul. | Levantar el stack con las imágenes versionadas (`make docker-build`, `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`) y verificar el catálogo de Consul. |
+| Falla *metadata.fileName no vacío* o *metadata.pageCount al menos 1*, pero `sizeBytes` es correcto | La imagen de Persistencia que está corriendo no devuelve `filename` ni `page_count` en el `201` (imagen vieja). | Reconstruir Persistencia con una versión nueva (`docker build -t papersoul-persistencia:v1.0.1 ../PaperSoul-Microservicio-Persistencia`), actualizar `PERSISTENCIA_IMAGE` y recrear el servicio. |
 | Falla el test *PDF seleccionado en Body → form-data → file* | No se eligió el archivo. | **Body → form-data → file → Select File**. |
 | No aparece la opción de elegir archivo | Se está usando Postman Web. | Usar **Postman Desktop**: la versión web no sube archivos locales. |
 

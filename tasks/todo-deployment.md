@@ -55,8 +55,9 @@ compatible y manejo correcto de señales/cierre.
 
 **Criterios de aceptación:**
 - [x] La imagen se construye desde los manifiestos Go del Orquestador sin modificar otros
-      microservicios. *(`Dockerfile` multi-stage + `.dockerignore`; `docker build` OK,
-      imagen `papersoul-orchestrator:local` de 20,7 MB. Solo se tocó el repo del Orquestador.)*
+      microservicios. *(`Dockerfile` multi-stage + `.dockerignore`; `make docker-build` OK,
+      imagen `papersoul-orchestrator:dev-<sha>` de 20,7 MB, con labels OCI de versión y
+      commit. Solo se tocó el repo del Orquestador.)*
 - [x] La imagen ejecuta el binario compilado, no descarga dependencias al iniciar y no
       requiere escribir documentos ni estado duradero en el filesystem. *(`go mod download`
       ocurre en la etapa builder; el runtime solo copia `/out/orchestrator` y arranca con
@@ -168,14 +169,16 @@ políticas acordadas.
 
 **Criterios de aceptación:**
 - [x] La configuración apunta al servicio HTTP/TCP y al puerto interno real del
-      Orquestador; no configura una ruta UDP para tráfico HTTP. *(Labels en
-      `docker-compose.yml`: `loadbalancer.server.port=8080`, router por el entrypoint
-      `https` con `Host(\`orquestador.universidad.localhost\`) && Path(\`/api/v1/documents/process\`)`;
-      sin labels UDP.)*
+      Orquestador; no configura una ruta UDP para tráfico HTTP. *(Tags del registro en
+      Consul: `traefik.http.services.orchestrator.loadbalancer.server.port=8080`, router por
+      el entrypoint `https` con
+      `Host(\`orquestador.universidad.localhost\`) && Path(\`/api/v1/documents/process\`)`;
+      sin tags UDP. El Compose ya no lleva labels de Traefik.)*
 - [x] La health check de Traefik consulta `GET /health`; no se trata como readiness ni como
-      indicador de disponibilidad de Extractor/Persistencia. *(`healthcheck.path=/health`
-      sobre el servicio del balanceador, `interval=10s`, `timeout=3s`; `/health` es
-      liveness aislado del proceso, verificado en la Tarea 4.)*
+      indicador de disponibilidad de Extractor/Persistencia. *(Tag
+      `loadbalancer.healthcheck.path=/health`, `interval=10s`, `timeout=3s`; `/health` es
+      liveness aislado del proceso, verificado en la Tarea 4. Consul usa el mismo check para
+      mantener la instancia `passing`.)*
 - [x] Una instancia que falle el liveness deja de recibir tráfico conforme al
       comportamiento documentado. *(Verificado: con `docker stop` de una réplica y
       `GET`/`POST` al endpoint, las requests siguientes fueron atendidas solo por la
@@ -186,8 +189,9 @@ políticas acordadas.
       al reiniciarla → 3/3.)*
 - [x] Las políticas de retry/circuit breaker reflejan los límites acordados y no se
       describen como garantía de reejecución en otra instancia si Traefik no la ofrece.
-      *(Middleware `orchestrator-retry` con `attempts=2` e `initialinterval=500ms`, y la
-      doc del contrato aclara que v3.5 no reintenta 5xx ni POST con cuerpo.)*
+      *(Middleware `orchestrator-retry` con `attempts=2` (2 intentos totales = 1 reintento) e
+      `initialinterval=500ms`; reintenta solo errores de dial, incluso en `POST`. La doc del
+      contrato aclara que no reintenta `5xx`/`503` sin `retryNonIdempotentMethod`.)*
 - [x] Ningún archivo inicia, define o modifica el despliegue global de Traefik. *(El
       Compose solo tiene el servicio `orchestrator`; el Traefik de verificación fue
       desechable, vía `docker run`, y se eliminó.)*
@@ -239,7 +243,8 @@ y cualquier límite o factor no aplicable.
       documentados con su evidencia.)*
 - [x] Se documentan también los factores que no requieren cambios y cualquier brecha
       pendiente, sin alterar servicios ajenos. *(Subsección *Brechas y pendientes*:
-      CI sin `docker build`/release de la imagen, validación contra el Traefik real del
+      el build de la imagen no corre en cada PR (solo `make ci`; el push a GHCR se dispara
+      con tags `v*.*.*` en `release.yml`), validación contra el Traefik real del
       profesor pendiente, y fronteras ajenas (contrato del Extractor y MongoDB de
       Persistencia) marcadas como fuera de este repo. Solo se tocó el repo del Orquestador.)*
 
