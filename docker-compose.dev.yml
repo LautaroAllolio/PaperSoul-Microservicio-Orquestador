@@ -1,6 +1,5 @@
-# SOLO LOCAL / NO FORMA PARTE DEL ENTREGABLE (está en .gitignore).
-# Agrega los downstream de los colegas para probar el flujo E2E contra el
-# Orquestador. No modifica sus repos: solo referencia imágenes ya construidas.
+# Stack local versionado para probar el flujo E2E. Agrega los downstream de los
+# colegas sin modificar sus repos: solo referencia imágenes ya construidas.
 #
 # Construir una vez:
 #   docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
@@ -9,8 +8,8 @@
 # Uso (combina con el compose base, que define la red `mired`):
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #
-# Persistencia necesita un MongoDB accesible: definir MONGODB_URI apuntando al
-# mongo que ya tengas levantado (este archivo no incluye mongo).
+# Consul y MongoDB se levantan por separado desde sus propios stacks. Persistencia
+# necesita un MongoDB accesible: definir MONGODB_URI apuntando al MongoDB levantado.
 services:
   extractor:
     image: ${EXTRACTOR_IMAGE:-pdfextractor:latest}
@@ -21,7 +20,7 @@ services:
       PDFEXTRACTOR_PORT: "9000"
       PDFEXTRACTOR_MIN_TEXT_LENGTH: "0"
     networks:
-      - mired 
+      - mired
 
   persistencia:
     image: ${PERSISTENCIA_IMAGE:-papersoul-persistencia:latest}

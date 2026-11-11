@@ -152,6 +152,10 @@ activemq-data/
 .envrc
 .venv
 
+# Consul local config may contain an ACL management token; data contains agent state.
+/consul/consul.json
+/consul/data/
+
 
 env/
 venv/

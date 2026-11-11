@@ -119,7 +119,8 @@ con un mensaje explícito. Es requisito que exista la red `mired` (la crea el
 stack de Traefik); este Compose no la crea ni la elimina.
 
 Para probar el flujo completo en local está `docker-compose.dev.yml`, que agrega
-Extractor y Persistencia a partir de sus imágenes ya construidas. El procedimiento
+los downstream Extractor y Persistencia a partir de sus imágenes ya construidas.
+Consul, Traefik y MongoDB se levantan por separado desde sus propios stacks. El procedimiento
 completo —MongoDB, red `mired`, variables, build, verificación y teardown— está en
 *Puesta en marcha local (flujo completo)*.
 
@@ -129,47 +130,57 @@ Para probar el flujo real —Traefik + MongoDB + Orquestador + Extractor + Persi
 en una máquina de desarrollo. Los comandos de Docker se ejecutan desde la raíz del
 repositorio en WSL/Linux; el `curl` se puede correr desde PowerShell o WSL.
 
-El orden es: **Traefik → MongoDB → los 3 microservicios**.
+El orden es: **Consul → Traefik → MongoDB → los 3 microservicios**.
 
 **Prerrequisitos**
 
 - Docker Engine con Compose v2.
-- Los stacks locales de Traefik y MongoDB (no forman parte de este repo). Traefik provee
-  la red `mired`, el puerto 443 y el certificado wildcard `*.universidad.localhost`;
-  MongoDB queda accesible como `mongodb:27017` (lo usa Persistencia, no el Orquestador).
-- `docker-compose.dev.yml` en la raíz: agrega los servicios `extractor` y
+- Los stacks locales de Consul, Traefik y MongoDB (no forman parte de este repo).
+  Consul se inicia independientemente desde `$HOME/docker/consul`, igual que Traefik
+  y MongoDB desde sus directorios. Los tres stacks y las aplicaciones comparten la red
+  externa `mired`. Traefik provee el puerto 443 y el certificado wildcard
+  `*.universidad.localhost`; MongoDB queda accesible como `mongodb:27017` (lo usa
+  Persistencia, no el Orquestador).
+- `docker-compose.dev.yml` en la raíz agrega únicamente los servicios `extractor` y
   `persistencia` a partir de sus imágenes ya construidas.
 
-**1. Levantar la infraestructura**
+**1. Variables de entorno**
 
-Ajustar las rutas a los stacks locales (`$HOME/docker/...` es la ubicación habitual en
-este entorno):
-
-```bash
-export TRAEFIK_STACK="$HOME/docker/traefik"
-export MONGO_STACK="$HOME/docker/mongodb"
-
-# Red compartida (solo la primera vez)
-docker network create mired 2>/dev/null || true
-
-# 1.a Traefik: ruteo, TLS y healthcheck del balanceador
-(cd "$TRAEFIK_STACK" && docker compose up -d)
-
-# 1.b MongoDB: lo consume Persistencia
-(cd "$MONGO_STACK" && docker compose up -d)
-```
-
-Esperá a que MongoDB acepte conexiones antes de levantar Persistencia (si tarda,
-Persistencia reintenta). Si ya tenés ambos stacks levantados, saltá al paso 2.
-
-**2. Variables de entorno**
+Copiar el ejemplo y completar `MONGODB_URI` antes de usar Compose:
 
 ```bash
 cp .env.example .env
 ```
 
-Completar en `.env` (las URLs se resuelven por nombre de servicio dentro de la red;
-no uses `localhost`):
+El directorio `$HOME/docker/consul/config` debe contener la configuración local de
+Consul. También se incluye [`consul/consul.json.example`](consul/consul.json.example)
+como plantilla sin token. La configuración y los datos reales de Consul permanecen
+en su stack independiente y no se copian a este repositorio.
+
+**2. Levantar la infraestructura**
+
+```bash
+export TRAEFIK_STACK="$HOME/docker/traefik"
+export MONGO_STACK="$HOME/docker/mongodb"
+export CONSUL_STACK="$HOME/docker/consul"
+
+# Red compartida (solo la primera vez)
+docker network create mired 2>/dev/null || true
+
+# 2.a Consul, iniciado desde su propio stack
+(cd "$CONSUL_STACK" && docker compose up -d)
+curl -fsS http://127.0.0.1:8500/v1/status/leader
+
+# 2.b Traefik: ruteo, TLS y healthcheck del balanceador
+(cd "$TRAEFIK_STACK" && docker compose up -d)
+
+# 2.c MongoDB: lo consume Persistencia
+(cd "$MONGO_STACK" && docker compose up -d)
+```
+
+Esperá a que MongoDB acepte conexiones antes de levantar Persistencia (si tarda,
+Persistencia reintenta). Si ya tenés la infraestructura levantada, saltá al paso 3.
+Las URLs se resuelven por nombre de servicio dentro de la red; no uses `localhost`:
 
 ```dotenv
 EXTRACTOR_URL=http://extractor:9000
@@ -203,10 +214,10 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
 ```
 
-Este comando levanta Orquestador + Extractor + Persistencia sobre la red `mired`; Traefik
-y MongoDB ya están arriba desde el paso 1. Quedan las réplicas del Orquestador
-(`ORCH_REPLICAS`, default 2) más 3 de Extractor y 3 de Persistencia. El Orquestador
-**no publica el 8080**: se llega únicamente por Traefik.
+Este comando levanta el Orquestador + Extractor + Persistencia sobre la red `mired`;
+Consul, Traefik y MongoDB ya están arriba desde el paso 2. Quedan las réplicas del
+Orquestador (`ORCH_REPLICAS`, default 2) más 3 de Extractor y 3 de Persistencia. El
+Orquestador **no publica el 8080**: se llega únicamente por Traefik.
 
 **5. Verificar el liveness**
 
@@ -254,6 +265,7 @@ entorno *Traefik*, header `Host` y verificación SSL desactivada.
 docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
 # Bajar la infraestructura (opcional)
+(cd "$HOME/docker/consul" && docker compose down)
 (cd "$HOME/docker/traefik" && docker compose down)
 (cd "$HOME/docker/mongodb" && docker compose down)
 ```
@@ -261,6 +273,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 **Secuencia resumida** (con `.env` e imágenes ya listas):
 
 ```bash
+(cd "$HOME/docker/consul" && docker compose up -d)
 (cd "$HOME/docker/traefik" && docker compose up -d)
 (cd "$HOME/docker/mongodb" && docker compose up -d)
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
@@ -283,8 +296,30 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ## Integración con Traefik
 
 La instancia Traefik se despliega por separado —**este Compose no la inicia ni la
-modifica**— y descubre a las réplicas por el **Docker provider** leyendo los labels del
-contenedor:
+modifica**— y usa el provider **Consul Catalog** para servicios registrados en Consul.
+Mantiene también los providers Docker y File: Docker sigue exponiendo la UI de Consul
+por sus labels. Mientras se migra cada microservicio, las reglas Docker actuales de las
+aplicaciones continúan activas.
+
+La configuración estática que se agrega en
+`$HOME/docker/traefik/config/traefik.yml` es:
+
+```yaml
+providers:
+  consulCatalog:
+    endpoint:
+      address: consul:8500
+    exposedByDefault: false
+    refreshInterval: 5s
+```
+
+La documentación oficial de Traefik v3.5 no lista `providers.consulCatalog.watch`
+como opción; el descubrimiento se basa en polling por `refreshInterval`. El Compose local
+declara `traefik:v3.7.12`. Los puertos publicados de Traefik y Consul se limitan a
+`127.0.0.1`; la UI de Consul también está disponible bajo el host TLS
+`consul.universidad.localhost`.
+
+Las reglas actuales del Orquestador se descubren por el Docker provider:
 
 - **URL pública**: `https://orquestador.universidad.localhost/api/v1/documents/process`.
 - **TLS**: el router usa el entrypoint `https` con `tls=true` **sin certresolver**: sirve el
@@ -300,7 +335,7 @@ contenedor:
   (`orchestrator`): Traefik las agrupa y reparte las requests entre las sanas. No hay
   `container_name` ni puertos publicados al host.
 - **Retry**: middleware `orchestrator-retry`, `attempts=2` con `initialInterval=500ms`.
-  Limitación de Traefik v3.5: reintenta solo cuando el backend no responde (fallo de
+  Limitación de Traefik: reintenta solo cuando el backend no responde (fallo de
   conexión/sin respuesta), **no** reintenta `5xx` ni `POST` con cuerpo, así que **no** es una
   garantía de reejecución en otra instancia. El endpoint es seguro de reintentar igual por la
   deduplicación por checksum.
