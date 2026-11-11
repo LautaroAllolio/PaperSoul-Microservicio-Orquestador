@@ -230,3 +230,52 @@ func TestServeAplicaElTimeoutDeCierre(t *testing.T) {
 
 	close(bloqueado) // liberamos el handler colgado para no dejar la goroutine viva
 }
+
+func TestBuildTagsIncluyeElContratoDeTraefikPorConsul(t *testing.T) {
+	tags := buildTags(8080)
+
+	want := []string{
+		"traefik.enable=true",
+		"traefik.http.routers.orchestrator.entrypoints=https",
+		"traefik.http.routers.orchestrator.rule=Host(`orquestador.universidad.localhost`) && Path(`/api/v1/documents/process`)",
+		"traefik.http.routers.orchestrator.tls=true",
+		"traefik.http.routers.orchestrator.middlewares=orchestrator-retry",
+		"traefik.http.services.orchestrator.loadbalancer.server.port=8080",
+		"traefik.http.services.orchestrator.loadbalancer.healthcheck.path=/health",
+		"traefik.http.services.orchestrator.loadbalancer.healthcheck.interval=10s",
+		"traefik.http.services.orchestrator.loadbalancer.healthcheck.timeout=3s",
+		"traefik.http.middlewares.orchestrator-retry.retry.attempts=2",
+		"traefik.http.middlewares.orchestrator-retry.retry.initialinterval=500ms",
+	}
+
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		if seen[tag] {
+			t.Fatalf("tag duplicada: %q", tag)
+		}
+		seen[tag] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Fatalf("falta la tag %q en %v", w, tags)
+		}
+	}
+	if len(tags) != len(want) {
+		t.Fatalf("tags = %d, quiero %d: %v", len(tags), len(want), tags)
+	}
+	if got := buildTags(9000)[5]; got != "traefik.http.services.orchestrator.loadbalancer.server.port=9000" {
+		t.Fatalf("la tag del puerto no sigue al puerto real: %q", got)
+	}
+}
+
+func TestServiceIDEsUnicoPorReplica(t *testing.T) {
+	if got := serviceID("abc123", 8080); got != "orchestrator-abc123-8080" {
+		t.Fatalf("serviceID = %q", got)
+	}
+	if got := serviceID("", 8080); got != "orchestrator-local-8080" {
+		t.Fatalf("serviceID sin hostname = %q", got)
+	}
+	if serviceID("a", 8080) == serviceID("b", 8080) {
+		t.Fatalf("dos réplicas no pueden compartir ID")
+	}
+}
