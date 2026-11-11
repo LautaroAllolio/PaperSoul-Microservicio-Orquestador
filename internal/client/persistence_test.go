@@ -32,7 +32,7 @@ func TestFindByChecksumDevuelveElDocumentoAlmacenado(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusOK, storedBody)
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	pers := client.NewPersistence(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	doc, err := pers.FindByChecksum(ctxWithCorrelation(), testChecksum)
 	if err != nil {
 		t.Fatalf("FindByChecksum = %v, quiero nil", err)
@@ -58,7 +58,7 @@ func TestFindByChecksum404MapeaADocumentNotFound(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusNotFound, `{"type":"urn:papersoul:persistence:not-found","status":404}`)
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	pers := client.NewPersistence(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	_, err := pers.FindByChecksum(context.Background(), testChecksum)
 
 	if !errors.Is(err, errorsvc.ErrDocumentNotFound) {
@@ -83,11 +83,15 @@ func TestFindByChecksumConFalloDelServidorMapeaAUnavailable(t *testing.T) {
 			var got requestCapture
 			srv := newFakeServer(t, &got, tc.status, tc.body)
 
-			pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+			resolver := &scriptedResolver{urls: []string{srv.URL}}
+			pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: 2 * time.Second})
 			_, err := pers.FindByChecksum(context.Background(), testChecksum)
 
 			if !errors.Is(err, errorsvc.ErrPersistenceUnavailable) {
 				t.Fatalf("error = %v, quiero ErrPersistenceUnavailable", err)
+			}
+			if resolver.callCount() != 1 {
+				t.Fatalf("el resolver se consultó %d veces: una respuesta HTTP no debe reintentarse", resolver.callCount())
 			}
 		})
 	}
@@ -95,12 +99,16 @@ func TestFindByChecksumConFalloDelServidorMapeaAUnavailable(t *testing.T) {
 
 func TestFindByChecksumConTimeoutMapeaAPersistenceTimeout(t *testing.T) {
 	srv := newSlowServer(t, 300*time.Millisecond)
+	resolver := &scriptedResolver{urls: []string{srv.URL}}
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 30 * time.Millisecond})
+	pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: 30 * time.Millisecond})
 	_, err := pers.FindByChecksum(context.Background(), testChecksum)
 
 	if !errors.Is(err, errorsvc.ErrPersistenceTimeout) {
 		t.Fatalf("error = %v, quiero ErrPersistenceTimeout", err)
+	}
+	if resolver.callCount() != 1 {
+		t.Fatalf("el resolver se consultó %d veces: un timeout no debe reintentarse", resolver.callCount())
 	}
 }
 
@@ -108,7 +116,7 @@ func TestStoreEnviaElJSONPlanoDeStoreDocumentRequest(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusCreated, storedBody)
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	pers := client.NewPersistence(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	in := storeRequest()
 	doc, err := pers.Store(ctxWithCorrelation(), in)
 	if err != nil {
@@ -168,7 +176,7 @@ func TestStoreNoReenviaElBinario(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusCreated, storedBody)
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	pers := client.NewPersistence(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	if _, err := pers.Store(context.Background(), storeRequest()); err != nil {
 		t.Fatalf("Store = %v, quiero nil", err)
 	}
@@ -181,7 +189,7 @@ func TestStore409MapeaAPersistenceConflict(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusConflict, `{"detail":"checksum duplicado"}`)
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	pers := client.NewPersistence(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	_, err := pers.Store(context.Background(), storeRequest())
 
 	if !errors.Is(err, errorsvc.ErrPersistenceConflict) {
@@ -205,11 +213,15 @@ func TestStoreConFalloDelServidorMapeaAUnavailable(t *testing.T) {
 			var got requestCapture
 			srv := newFakeServer(t, &got, tc.status, tc.body)
 
-			pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+			resolver := &scriptedResolver{urls: []string{srv.URL}}
+			pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: 2 * time.Second})
 			_, err := pers.Store(context.Background(), storeRequest())
 
 			if !errors.Is(err, errorsvc.ErrPersistenceUnavailable) {
 				t.Fatalf("error = %v, quiero ErrPersistenceUnavailable", err)
+			}
+			if resolver.callCount() != 1 {
+				t.Fatalf("el resolver se consultó %d veces: una respuesta HTTP no debe reintentarse", resolver.callCount())
 			}
 		})
 	}
@@ -217,24 +229,92 @@ func TestStoreConFalloDelServidorMapeaAUnavailable(t *testing.T) {
 
 func TestStoreConTimeoutMapeaAPersistenceTimeout(t *testing.T) {
 	srv := newSlowServer(t, 300*time.Millisecond)
+	resolver := &scriptedResolver{urls: []string{srv.URL}}
 
-	pers := client.NewPersistence(client.Options{BaseURL: srv.URL, Timeout: 30 * time.Millisecond})
+	pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: 30 * time.Millisecond})
 	_, err := pers.Store(context.Background(), storeRequest())
 
 	if !errors.Is(err, errorsvc.ErrPersistenceTimeout) {
 		t.Fatalf("error = %v, quiero ErrPersistenceTimeout", err)
 	}
+	if resolver.callCount() != 1 {
+		t.Fatalf("el resolver se consultó %d veces: un timeout no debe reintentarse", resolver.callCount())
+	}
 }
 
 func TestStoreSinConexionMapeaAUnavailable(t *testing.T) {
-	srv := newFakeServer(t, &requestCapture{}, http.StatusCreated, storedBody)
-	url := srv.URL
-	srv.Close()
+	resolver := &scriptedResolver{urls: []string{closedServerURL(t)}}
 
-	pers := client.NewPersistence(client.Options{BaseURL: url, Timeout: time.Second})
+	pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: time.Second})
 	_, err := pers.Store(context.Background(), storeRequest())
 
 	if !errors.Is(err, errorsvc.ErrPersistenceUnavailable) {
 		t.Fatalf("error = %v, quiero ErrPersistenceUnavailable", err)
+	}
+	// Única excepción a "no reintentar": el dial falló, la petición nunca salió.
+	if resolver.callCount() != 2 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 2 (un reintento por dial)", resolver.callCount())
+	}
+}
+
+func TestFindByChecksumReintentaUnaVezContraOtraInstanciaSiFallaElDial(t *testing.T) {
+	var got requestCapture
+	alive := newFakeServer(t, &got, http.StatusOK, storedBody)
+	resolver := &scriptedResolver{urls: []string{closedServerURL(t), alive.URL}}
+
+	pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: 2 * time.Second})
+	doc, err := pers.FindByChecksum(ctxWithCorrelation(), testChecksum)
+	if err != nil {
+		t.Fatalf("FindByChecksum = %v, quiero nil tras el reintento", err)
+	}
+	if doc.ID != "3f2504e0-4f89-41d3-9a0c-0305e82c3301" {
+		t.Fatalf("respuesta tipada inesperada: %+v", doc)
+	}
+	if resolver.callCount() != 2 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 2", resolver.callCount())
+	}
+	if got.Method != http.MethodGet || got.Path != "/api/v1/documents/by-checksum/"+testChecksum {
+		t.Fatalf("request reconstruido inesperado: %s %s", got.Method, got.Path)
+	}
+}
+
+func TestStoreReintentaUnaVezContraOtraInstanciaSiFallaElDial(t *testing.T) {
+	var got requestCapture
+	alive := newFakeServer(t, &got, http.StatusCreated, storedBody)
+	resolver := &scriptedResolver{urls: []string{closedServerURL(t), alive.URL}}
+
+	pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: 2 * time.Second})
+	doc, err := pers.Store(ctxWithCorrelation(), storeRequest())
+	if err != nil {
+		t.Fatalf("Store = %v, quiero nil tras el reintento", err)
+	}
+	if doc.PageCount != 7 {
+		t.Fatalf("respuesta tipada inesperada: %+v", doc)
+	}
+	if resolver.callCount() != 2 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 2", resolver.callCount())
+	}
+	// El body JSON se reconstruyó completo.
+	var payload map[string]any
+	if err := json.Unmarshal(got.Body, &payload); err != nil {
+		t.Fatalf("el body reconstruido no es JSON: %v", err)
+	}
+	if payload["pdf_hash"] != testChecksum {
+		t.Fatalf("pdf_hash = %v, quiero %q", payload["pdf_hash"], testChecksum)
+	}
+}
+
+func TestPersistenceResolverErrorMapeaAUnavailable(t *testing.T) {
+	resolver := &scriptedResolver{err: errors.New("consul caído")}
+	pers := client.NewPersistence(client.Options{Resolver: resolver, Timeout: time.Second})
+
+	if _, err := pers.FindByChecksum(context.Background(), testChecksum); !errors.Is(err, errorsvc.ErrPersistenceUnavailable) {
+		t.Fatalf("FindByChecksum error = %v, quiero ErrPersistenceUnavailable", err)
+	}
+	if _, err := pers.Store(context.Background(), storeRequest()); !errors.Is(err, errorsvc.ErrPersistenceUnavailable) {
+		t.Fatalf("Store error = %v, quiero ErrPersistenceUnavailable", err)
+	}
+	if resolver.callCount() != 2 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 2 (una por llamada)", resolver.callCount())
 	}
 }

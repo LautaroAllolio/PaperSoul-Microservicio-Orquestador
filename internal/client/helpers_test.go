@@ -3,15 +3,18 @@ package client_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/papersoul/orchestrator/internal/client"
 	"github.com/papersoul/orchestrator/internal/domain"
 	"github.com/papersoul/orchestrator/internal/platform/reqid"
 )
@@ -43,6 +46,53 @@ type requestCapture struct {
 
 func pdfBytes(n int) []byte {
 	return append([]byte("%PDF-1.4\n"), bytes.Repeat([]byte("x"), n)...)
+}
+
+// scriptedResolver devuelve URLs en orden y cuenta las resoluciones. Con una
+// sola URL la repite indefinidamente, para poder contar reintentos.
+type scriptedResolver struct {
+	mu    sync.Mutex
+	urls  []string
+	err   error
+	calls int
+}
+
+func (r *scriptedResolver) Resolve(_ context.Context, _ string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if r.err != nil {
+		return "", r.err
+	}
+	if len(r.urls) == 0 {
+		return "", fmt.Errorf("resolver de test sin URLs")
+	}
+	url := r.urls[0]
+	if len(r.urls) > 1 {
+		r.urls = r.urls[1:]
+	}
+	return url, nil
+}
+
+func (r *scriptedResolver) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// fixedResolver siempre devuelve la misma URL.
+func fixedResolver(url string) client.Resolver {
+	return &scriptedResolver{urls: []string{url}}
+}
+
+// closedServerURL levanta un servidor, lo cierra y devuelve su URL: el puerto
+// queda sin escuchar, así el próximo dial falla con connection refused.
+func closedServerURL(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	return url
 }
 
 func newExtractRequest(fileName string, content []byte) domain.ExtractRequest {

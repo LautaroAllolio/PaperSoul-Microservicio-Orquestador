@@ -22,7 +22,7 @@ func TestExtractEnviaMultipartSinChunkedYConContentLengthExacto(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusOK, validExtractBody)
 
-	ext := client.NewExtractor(client.Options{BaseURL: srv.URL + "/", Timeout: 2 * time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: fixedResolver(srv.URL + "/"), Timeout: 2 * time.Second})
 	res, err := ext.Extract(ctxWithCorrelation(), newExtractRequest("factura.pdf", content))
 	if err != nil {
 		t.Fatalf("Extract = %v, quiero nil", err)
@@ -74,7 +74,7 @@ func TestExtractAceptaTextoVacioYMetodoOCR(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusOK, `{"extracted_text":"","extraction_method":"ocr","page_count":1}`)
 
-	ext := client.NewExtractor(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	res, err := ext.Extract(context.Background(), newExtractRequest("escaneado.pdf", pdfBytes(64)))
 	if err != nil {
 		t.Fatalf("Extract = %v, quiero nil: un PDF escaneado sin texto es un resultado válido", err)
@@ -88,7 +88,7 @@ func TestExtractOmiteCorrelationIDSiNoVieneEnElContexto(t *testing.T) {
 	var got requestCapture
 	srv := newFakeServer(t, &got, http.StatusOK, validExtractBody)
 
-	ext := client.NewExtractor(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	if _, err := ext.Extract(context.Background(), newExtractRequest("doc.pdf", pdfBytes(64))); err != nil {
 		t.Fatalf("Extract = %v, quiero nil", err)
 	}
@@ -107,7 +107,7 @@ func TestExtractResekeaElBinarioAntesDeReenviarlo(t *testing.T) {
 		t.Fatalf("desfasando el reader: %v", err)
 	}
 
-	ext := client.NewExtractor(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: fixedResolver(srv.URL), Timeout: 2 * time.Second})
 	if _, err := ext.Extract(context.Background(), in); err != nil {
 		t.Fatalf("Extract = %v, quiero nil", err)
 	}
@@ -117,7 +117,7 @@ func TestExtractResekeaElBinarioAntesDeReenviarlo(t *testing.T) {
 }
 
 func TestExtractConFileNilDevuelveErrInternal(t *testing.T) {
-	ext := client.NewExtractor(client.Options{BaseURL: "http://127.0.0.1:1", Timeout: time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: fixedResolver("http://127.0.0.1:1"), Timeout: time.Second})
 
 	_, err := ext.Extract(context.Background(), domain.ExtractRequest{FileName: "doc.pdf", Size: 10})
 
@@ -127,7 +127,7 @@ func TestExtractConFileNilDevuelveErrInternal(t *testing.T) {
 }
 
 func TestExtractConSizeInvalidoDevuelveError(t *testing.T) {
-	ext := client.NewExtractor(client.Options{BaseURL: "http://127.0.0.1:1", Timeout: time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: fixedResolver("http://127.0.0.1:1"), Timeout: time.Second})
 
 	_, err := ext.Extract(context.Background(), domain.ExtractRequest{
 		File:     bytes.NewReader(pdfBytes(8)),
@@ -164,33 +164,41 @@ func TestExtractMapeaFallosDelDownstream(t *testing.T) {
 			var got requestCapture
 			srv := newFakeServer(t, &got, tc.status, tc.body)
 
-			ext := client.NewExtractor(client.Options{BaseURL: srv.URL, Timeout: 2 * time.Second})
+			resolver := &scriptedResolver{urls: []string{srv.URL}}
+			ext := client.NewExtractor(client.Options{Resolver: resolver, Timeout: 2 * time.Second})
 			_, err := ext.Extract(ctxWithCorrelation(), newExtractRequest("doc.pdf", pdfBytes(128)))
 
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, quiero %v", err, tc.wantErr)
+			}
+			if resolver.callCount() != 1 {
+				t.Fatalf("el resolver se consultó %d veces: una respuesta HTTP no debe reintentarse", resolver.callCount())
 			}
 		})
 	}
 }
 
 func TestExtractSinConexionMapeaAUnavailable(t *testing.T) {
-	srv := newFakeServer(t, &requestCapture{}, http.StatusOK, validExtractBody)
-	url := srv.URL
-	srv.Close() // nadie escucha en ese puerto
+	url := closedServerURL(t)
+	resolver := &scriptedResolver{urls: []string{url}}
 
-	ext := client.NewExtractor(client.Options{BaseURL: url, Timeout: time.Second})
+	ext := client.NewExtractor(client.Options{Resolver: resolver, Timeout: time.Second})
 	_, err := ext.Extract(context.Background(), newExtractRequest("doc.pdf", pdfBytes(64)))
 
 	if !errors.Is(err, errorsvc.ErrExtractorUnavailable) {
 		t.Fatalf("error = %v, quiero ErrExtractorUnavailable", err)
 	}
+	// Única excepción a "no reintentar": el dial falló, la petición nunca salió.
+	if resolver.callCount() != 2 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 2 (un reintento por dial)", resolver.callCount())
+	}
 }
 
 func TestExtractConTimeoutMapeaAErrExtractorTimeout(t *testing.T) {
 	srv := newSlowServer(t, 300*time.Millisecond)
+	resolver := &scriptedResolver{urls: []string{srv.URL}}
 
-	ext := client.NewExtractor(client.Options{BaseURL: srv.URL, Timeout: 30 * time.Millisecond})
+	ext := client.NewExtractor(client.Options{Resolver: resolver, Timeout: 30 * time.Millisecond})
 	start := time.Now()
 	_, err := ext.Extract(context.Background(), newExtractRequest("doc.pdf", pdfBytes(64)))
 	elapsed := time.Since(start)
@@ -200,5 +208,54 @@ func TestExtractConTimeoutMapeaAErrExtractorTimeout(t *testing.T) {
 	}
 	if elapsed > 250*time.Millisecond {
 		t.Fatalf("Extract tardó %v: el deadline del client no cortó la llamada", elapsed)
+	}
+	if resolver.callCount() != 1 {
+		t.Fatalf("el resolver se consultó %d veces: un timeout no debe reintentarse", resolver.callCount())
+	}
+}
+
+func TestExtractReintentaUnaVezContraOtraInstanciaSiFallaElDial(t *testing.T) {
+	content := pdfBytes(512)
+	var got requestCapture
+	alive := newFakeServer(t, &got, http.StatusOK, validExtractBody)
+	resolver := &scriptedResolver{urls: []string{closedServerURL(t), alive.URL}}
+
+	ext := client.NewExtractor(client.Options{Resolver: resolver, Timeout: 2 * time.Second})
+	res, err := ext.Extract(ctxWithCorrelation(), newExtractRequest("factura.pdf", content))
+	if err != nil {
+		t.Fatalf("Extract = %v, quiero nil tras el reintento", err)
+	}
+	if res.PageCount != 7 {
+		t.Fatalf("respuesta tipada inesperada: %+v", res)
+	}
+	if resolver.callCount() != 2 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 2", resolver.callCount())
+	}
+	// El request se reconstruyó: el binario y el checksum llegan completos.
+	if !bytes.Equal(got.FileContent, content) {
+		t.Fatalf("el binario reenviado difiere del original (%d vs %d bytes)", len(got.FileContent), len(content))
+	}
+	if got.ChecksumField != testChecksum || got.ChecksumHeader != testChecksum {
+		t.Fatalf("checksum field/header = %q/%q, quiero %q", got.ChecksumField, got.ChecksumHeader, testChecksum)
+	}
+	if got.ContentLength != got.BodyLength {
+		t.Fatalf("ContentLength = %d pero el body recibido mide %d", got.ContentLength, got.BodyLength)
+	}
+}
+
+func TestExtractResolverErrorMapeaAUnavailable(t *testing.T) {
+	resolver := &scriptedResolver{err: errors.New("consul caído")}
+
+	ext := client.NewExtractor(client.Options{Resolver: resolver, Timeout: time.Second})
+	_, err := ext.Extract(context.Background(), newExtractRequest("doc.pdf", pdfBytes(64)))
+
+	if !errors.Is(err, errorsvc.ErrExtractorUnavailable) {
+		t.Fatalf("error = %v, quiero ErrExtractorUnavailable (502, no 504)", err)
+	}
+	if errors.Is(err, errorsvc.ErrExtractorTimeout) {
+		t.Fatalf("un fallo de descubrimiento no debe mapear a timeout: %v", err)
+	}
+	if resolver.callCount() != 1 {
+		t.Fatalf("el resolver se consultó %d veces, quiero 1", resolver.callCount())
 	}
 }

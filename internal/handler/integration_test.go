@@ -41,6 +41,7 @@ import (
 	"github.com/papersoul/orchestrator/internal/domain"
 	"github.com/papersoul/orchestrator/internal/handler"
 	"github.com/papersoul/orchestrator/internal/platform/config"
+	"github.com/papersoul/orchestrator/internal/platform/discovery"
 	"github.com/papersoul/orchestrator/internal/platform/pdf"
 	"github.com/papersoul/orchestrator/internal/platform/problem"
 	"github.com/papersoul/orchestrator/internal/service"
@@ -109,9 +110,10 @@ func montarE2E(t *testing.T, ajustar func(*config.Config)) *e2e {
 		ajustar(&cfg)
 	}
 
+	resolver := discovery.NewStatic(cfg.ExtractorURL, cfg.PersistenceURL)
 	orchestrator := service.NewOrchestrator(
-		client.NewExtractor(client.Options{BaseURL: cfg.ExtractorURL, Timeout: cfg.ExtractorTimeout}),
-		client.NewPersistence(client.Options{BaseURL: cfg.PersistenceURL, Timeout: cfg.PersistenceTimeout}),
+		client.NewExtractor(client.Options{Resolver: resolver, Timeout: cfg.ExtractorTimeout}),
+		client.NewPersistence(client.Options{Resolver: resolver, Timeout: cfg.PersistenceTimeout}),
 		pdf.New(cfg.ValidationRelaxed),
 	)
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
