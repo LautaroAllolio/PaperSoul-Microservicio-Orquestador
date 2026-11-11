@@ -17,9 +17,17 @@ services:
       ORCH_MAX_FILE_SIZE: ${ORCH_MAX_FILE_SIZE:-26214400}
       ORCH_VALIDATION_RELAXED: ${ORCH_VALIDATION_RELAXED:-true}
       ORCH_MAX_CONCURRENCY: ${ORCH_MAX_CONCURRENCY:-8}
-      EXTRACTOR_URL: ${EXTRACTOR_URL:?defina EXTRACTOR_URL (p. ej. http://extractor:9000)}
+      # Descubrimiento: `consul` (los Compose) o `static` (desarrollo sin Consul).
+      # En `consul` las URLs fijas de abajo no se usan y pueden quedar vacías.
+      DISCOVERY: ${DISCOVERY:-consul}
+      CONSUL_HTTP_ADDR: ${CONSUL_HTTP_ADDR:-http://consul:8500}
+      # Solo para contenedores con varias redes: fuerza la IP que se anuncia en
+      # Consul (si se omite, se autodetecta la primera IPv4 no loopback).
+      ORCH_ADVERTISE_ADDR: ${ORCH_ADVERTISE_ADDR:-}
+      # Solo se usan con DISCOVERY=static; en modo consul quedan vacías.
+      EXTRACTOR_URL: ${EXTRACTOR_URL:-}
       EXTRACTOR_TIMEOUT: ${EXTRACTOR_TIMEOUT:-30s}
-      PERSISTENCE_URL: ${PERSISTENCE_URL:?defina PERSISTENCE_URL (p. ej. http://persistencia:8000)}
+      PERSISTENCE_URL: ${PERSISTENCE_URL:-}
       PERSISTENCE_TIMEOUT: ${PERSISTENCE_TIMEOUT:-15s}
       ORCH_SHUTDOWN_TIMEOUT: ${ORCH_SHUTDOWN_TIMEOUT:-10s}
     # Margen mayor que ORCH_SHUTDOWN_TIMEOUT para que el cierre graceful termine.
@@ -28,37 +36,10 @@ services:
       replicas: ${ORCH_REPLICAS:-2}
     networks:
       - mired
-    # Descubrimiento de las réplicas por el Docker provider de la instancia Traefik
-    # existente. Labels del servicio (shared por todas las réplicas): un único router
-    # y un único servicio con balanceo y healthcheck, por eso NO fijamos container_name.
-    # La instancia Traefik usa exposedByDefault=false en su traefik.yml: sin
-    # traefik.enable=true el contenedor quedaría invisible para el proxy.
-    labels:
-      - "traefik.enable=true"
-      # IP a usar dentro de la red compartida (Traefik vive en `mired`).
-      - "traefik.docker.network=mired"
-      # La API es HTTP/TCP (sin UDP). El router va por https: el entrypoint http
-      # (:80) del Traefik existente redirige globalmente a https.
-      - "traefik.http.routers.orchestrator.entrypoints=https"
-      # Host cubierto por el certificado estático (wildcard *.universidad.localhost)
-      # y path exacto del endpoint (así la app conserva sus 404/405/502 nativos).
-      - "traefik.http.routers.orchestrator.rule=Host(`orquestador.universidad.localhost`) && Path(`/api/v1/documents/process`)"
-      # Sin certresolver (el Traefik existente usa cert.pem/key.pem estáticos): solo
-      # se marca TLS para que el entrypoint https sirva el certificado del default TLS store.
-      - "traefik.http.routers.orchestrator.tls=true"
-      - "traefik.http.routers.orchestrator.middlewares=orchestrator-retry"
-      # Las réplicas comparten este nombre de servicio: Traefik las agrupa y balancea.
-      - "traefik.http.services.orchestrator.loadbalancer.server.port=8080"
-      # Health check del balanceador = liveness GET /health (aislado de downstream).
-      - "traefik.http.services.orchestrator.loadbalancer.healthcheck.path=/health"
-      - "traefik.http.services.orchestrator.loadbalancer.healthcheck.interval=10s"
-      - "traefik.http.services.orchestrator.loadbalancer.healthcheck.timeout=3s"
-      # Retry limitado a lo que ofrece Traefik v3.5: reintenta solo cuando el backend
-      # no responde (error de conexión/sin respuesta). v3.5 NO reintenta respuestas
-      # 5xx (status) ni POST con cuerpo (retryNonIdempotentMethod); por eso esto NO
-      # es una garantía de reejecución en otra instancia.
-      - "traefik.http.middlewares.orchestrator-retry.retry.attempts=2"
-      - "traefik.http.middlewares.orchestrator-retry.retry.initialinterval=500ms"
+    # Sin labels de Traefik: el ruteo viaja como tags del registro en Consul
+    # (traefik.enable=true incluida). La instancia Traefik usa Consul Catalog con
+    # exposedByDefault=false, así que solo descubre lo que se registra en Consul.
+    # El Docker provider sigue activo para la UI de Consul, no para esta app.
     # Sin `ports:` (no se publica al host) y sin `container_name` (permite escalar).
 
 networks:
