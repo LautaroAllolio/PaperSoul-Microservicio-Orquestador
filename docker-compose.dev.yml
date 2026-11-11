@@ -1,9 +1,10 @@
 # Stack local versionado para probar el flujo E2E. Agrega los downstream de los
 # colegas sin modificar sus repos: solo referencia imágenes ya construidas.
 #
-# Construir una vez:
-#   docker build -t pdfextractor:latest ../PaperSoul-Microservicio-Extractor
-#   docker build -t papersoul-persistencia:latest ../PaperSoul-Microservicio-Persistencia
+# Las tres imágenes se referencian por versión concreta; no se usa `:latest`.
+# Construir/etiquetar una vez (cada repo define su propia versión):
+#   docker build -t pdfextractor:v1.0.0 ../PaperSoul-Microservicio-Extractor
+#   docker build -t papersoul-persistencia:v1.0.0 ../PaperSoul-Microservicio-Persistencia
 #
 # Uso (combina con el compose base, que define la red `mired`):
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
@@ -12,7 +13,7 @@
 # necesita un MongoDB accesible: definir MONGODB_URI apuntando al MongoDB levantado.
 services:
   extractor:
-    image: ${EXTRACTOR_IMAGE:-pdfextractor:latest}
+    image: ${EXTRACTOR_IMAGE:?Definí EXTRACTOR_IMAGE con una versión concreta (p. ej. pdfextractor:v1.0.0)}
     restart: unless-stopped
     deploy:
       replicas: 3
@@ -23,7 +24,7 @@ services:
       - mired
 
   persistencia:
-    image: ${PERSISTENCIA_IMAGE:-papersoul-persistencia:latest}
+    image: ${PERSISTENCIA_IMAGE:?Definí PERSISTENCIA_IMAGE con una versión concreta (p. ej. papersoul-persistencia:v1.0.0)}
     restart: unless-stopped
     deploy:
       replicas: 3

@@ -4,13 +4,16 @@
 #
 # No publica el puerto 8080 al host (lo expone Traefik dentro de `mired`) y no
 # fija `container_name`, así que se pueden levantar varias réplicas.
-# La imagen se construye aparte (docker build) y se referencia aquí con
-# ORCH_IMAGE, de modo que se puedan desplegar distintas versiones.
+# La imagen se construye/publica aparte (make docker-build / CI) y se referencia
+# aquí con ORCH_IMAGE. No hay `build:` ni tags flotantes: cada despliegue usa una
+# versión concreta (idealmente por digest en producción).
 name: papersoul-orchestrator
 
 services:
   orchestrator:
-    image: ${ORCH_IMAGE:-papersoul-orchestrator:local}
+    # Sin default `:local`: si falta ORCH_IMAGE, Compose falla con un mensaje
+    # explícito en vez de arrancar una imagen vieja sin darse cuenta.
+    image: ${ORCH_IMAGE:?Definí ORCH_IMAGE con una imagen versionada (p. ej. ghcr.io/lautaroallolio/papersoul-microservicio-orquestador:v0.1.0)}
     restart: unless-stopped
     environment:
       ORCH_ADDR: ${ORCH_ADDR:-:8080}

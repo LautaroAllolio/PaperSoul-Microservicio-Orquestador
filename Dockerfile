@@ -25,6 +25,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # no incluye shell ni gestores de paquetes, lo que reduce la superficie de ataque.
 FROM gcr.io/distroless/static-debian12:nonroot
 
+# Metadatos OCI. El workflow de release los completa con la versión y el commit;
+# en un build local quedan como `dev`/`unknown` para no confundirlos con un release.
+# `org.opencontainers.image.source` vincula el paquete de GHCR con este repositorio.
+ARG VERSION=dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="PaperSoul Orquestador" \
+      org.opencontainers.image.description="Orquestador y validador de PDFs de PaperSoul" \
+      org.opencontainers.image.source="https://github.com/LautaroAllolio/PaperSoul-Microservicio-Orquestador" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
+
 COPY --from=builder /out/orchestrator /orchestrator
 
 # Único valor operativo por defecto. EXTRACTOR_URL y PERSISTENCE_URL son
