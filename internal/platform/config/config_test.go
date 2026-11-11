@@ -24,6 +24,9 @@ var envVars = []string{
 	"PERSISTENCE_URL",
 	"PERSISTENCE_TIMEOUT",
 	"ORCH_SHUTDOWN_TIMEOUT",
+	"DISCOVERY",
+	"CONSUL_HTTP_ADDR",
+	"ORCH_ADVERTISE_ADDR",
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -61,6 +64,15 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Errorf("ShutdownTimeout = %s, quiero %s", cfg.ShutdownTimeout, 10*time.Second)
 	}
+	if cfg.Discovery != "static" {
+		t.Errorf("Discovery = %q, quiero %q", cfg.Discovery, "static")
+	}
+	if cfg.ConsulHTTPAddr != "" {
+		t.Errorf("ConsulHTTPAddr = %q, quiero vacío", cfg.ConsulHTTPAddr)
+	}
+	if cfg.AdvertiseAddr != "" {
+		t.Errorf("AdvertiseAddr = %q, quiero vacío", cfg.AdvertiseAddr)
+	}
 }
 
 func TestLoadParsesAllVariables(t *testing.T) {
@@ -75,6 +87,9 @@ func TestLoadParsesAllVariables(t *testing.T) {
 		"PERSISTENCE_URL":         persistenceURL,
 		"PERSISTENCE_TIMEOUT":     "6s",
 		"ORCH_SHUTDOWN_TIMEOUT":   "7s",
+		"DISCOVERY":               "consul",
+		"CONSUL_HTTP_ADDR":        "http://consul:8500",
+		"ORCH_ADVERTISE_ADDR":     "172.18.0.5",
 	})
 
 	want := config.Config{
@@ -88,6 +103,9 @@ func TestLoadParsesAllVariables(t *testing.T) {
 		PersistenceURL:     persistenceURL,
 		PersistenceTimeout: 6 * time.Second,
 		ShutdownTimeout:    7 * time.Second,
+		Discovery:          "consul",
+		ConsulHTTPAddr:     "http://consul:8500",
+		AdvertiseAddr:      "172.18.0.5",
 	}
 
 	cfg, err := config.Load()
@@ -132,6 +150,49 @@ func TestFailsOnEmptyDownstreamURL(t *testing.T) {
 		t.Fatalf("PERSISTENCE_URL vacía debe fallar")
 	} else if !strings.Contains(err.Error(), "PERSISTENCE_URL") {
 		t.Fatalf("error (%v) no menciona PERSISTENCE_URL", err)
+	}
+}
+
+func TestFailsOnInvalidDiscoveryMode(t *testing.T) {
+	setEnv(t, map[string]string{
+		"DISCOVERY":       "dns",
+		"EXTRACTOR_URL":   extractorURL,
+		"PERSISTENCE_URL": persistenceURL,
+	})
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatalf("DISCOVERY inválido debe fallar")
+	}
+	if !strings.Contains(err.Error(), "DISCOVERY") {
+		t.Fatalf("error (%v) no menciona DISCOVERY", err)
+	}
+}
+
+func TestConsulModeNoRequiereURLsFijas(t *testing.T) {
+	setEnv(t, map[string]string{
+		"DISCOVERY":        "consul",
+		"CONSUL_HTTP_ADDR": "http://consul:8500",
+	})
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("modo consul sin URLs fijas debe arrancar: %v", err)
+	}
+	if cfg.ExtractorURL != "" || cfg.PersistenceURL != "" {
+		t.Fatalf("en modo consul las URLs fijas deben quedar vacías: %+v", cfg)
+	}
+}
+
+func TestConsulModeRequiereConsulHTTPAddr(t *testing.T) {
+	setEnv(t, map[string]string{"DISCOVERY": "consul"})
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatalf("modo consul sin CONSUL_HTTP_ADDR debe fallar")
+	}
+	if !strings.Contains(err.Error(), "CONSUL_HTTP_ADDR") {
+		t.Fatalf("error (%v) no menciona CONSUL_HTTP_ADDR", err)
 	}
 }
 
