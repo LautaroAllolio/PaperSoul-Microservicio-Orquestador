@@ -134,7 +134,8 @@ func TestRegistrarReintentaConBackoffHastaLograrElRegistro(t *testing.T) {
 }
 
 func TestRegistrarSeDetieneAlCancelarElContexto(t *testing.T) {
-	_, srv := newFakeAgent(t)
+	f, srv := newFakeAgent(t)
+	atomic.StoreInt32(&f.failFirst, 1_000) // siempre falla: fuerza el backoff
 	r := newTestRegistrar(t, srv.URL)
 	ctx, cancel := context.WithCancel(context.Background())
 	r.sleep = func(context.Context, time.Duration) error {

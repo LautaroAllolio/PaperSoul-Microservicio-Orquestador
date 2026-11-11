@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -30,6 +31,19 @@ const (
 	// graceful promete no hacer.
 	readHeaderTimeout = 5 * time.Second
 	idleTimeout       = 60 * time.Second
+
+	// Identidad con la que el Orquestador se registra en Consul. El host
+	// público es el que cubre el certificado wildcard *.universidad.localhost.
+	consulServiceName = "orchestrator"
+	publicHost        = "orquestador.universidad.localhost"
+
+	// Checks del laboratorio: 3 s detectan una réplica muerta bastante antes
+	// que los 10 s clásicos; el timeout de 1 s evita colgar el check.
+	consulCheckInterval   = 3 * time.Second
+	consulCheckTimeout    = time.Second
+	consulDeregisterAfter = time.Minute
+	// deregisterTimeout acota el desregistro durante el cierre graceful.
+	deregisterTimeout = 2 * time.Second
 )
 
 func main() {
@@ -80,6 +94,52 @@ func run(logger *slog.Logger) error {
 		"shutdown_timeout_ms", milisegundos(cfg.ShutdownTimeout),
 	)
 
+	// En modo static no hay agente de Consul: la app arranca y sirve igual para
+	// desarrollo local, tests e integración por etapas.
+	if cfg.Discovery == "consul" {
+		registrar, err := discovery.NewRegistrar(discovery.RegisterOptions{
+			Address: cfg.ConsulHTTPAddr,
+			Logger:  logger,
+		})
+		if err != nil {
+			return fmt.Errorf("registro en Consul: %w", err)
+		}
+
+		svc, err := buildRegistration(cfg, ln)
+		if err != nil {
+			return fmt.Errorf("registro en Consul: %w", err)
+		}
+
+		regCtx, cancelReg := context.WithCancel(context.Background())
+		regDone := make(chan struct{})
+		go func() {
+			defer close(regDone)
+			if err := registrar.RegisterWithRetry(regCtx, svc); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					logger.Warn("el registro en Consul se detuvo", "service_id", svc.ID, "error", err)
+				}
+				return
+			}
+			logger.Info("servicio registrado en Consul",
+				"service_id", svc.ID, "address", svc.Address, "port", svc.Port)
+		}()
+
+		defer func() {
+			// Primero se corta el loop de reintento y recién después se
+			// desregistra: si no, un registro tardío reviviría la instancia.
+			cancelReg()
+			<-regDone
+
+			dctx, cancel := context.WithTimeout(context.Background(), deregisterTimeout)
+			defer cancel()
+			if err := registrar.Deregister(dctx, svc.ID); err != nil {
+				logger.Warn("no se pudo desregistrar de Consul", "service_id", svc.ID, "error", err)
+				return
+			}
+			logger.Info("servicio desregistrado de Consul", "service_id", svc.ID)
+		}()
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -88,6 +148,64 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("cierre graceful completo")
 	return nil
+}
+
+// buildRegistration arma la instancia que se publica en Consul: identidad
+// única por réplica, IP anunciada, tags de Traefik y check de liveness.
+func buildRegistration(cfg config.Config, ln net.Listener) (discovery.Service, error) {
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return discovery.Service{}, fmt.Errorf("el listener no expone un puerto TCP: %T", ln.Addr())
+	}
+
+	advertise, err := discovery.ResolveAdvertiseAddr(cfg.AdvertiseAddr)
+	if err != nil {
+		return discovery.Service{}, err
+	}
+
+	hostname, _ := os.Hostname() // si falla, serviceID cae a un nombre estable
+	return discovery.Service{
+		ID:      serviceID(hostname, tcpAddr.Port),
+		Name:    consulServiceName,
+		Address: advertise,
+		Port:    tcpAddr.Port,
+		Tags:    buildTags(tcpAddr.Port),
+		Check: discovery.Check{
+			HTTP: fmt.Sprintf("http://%s%s",
+				net.JoinHostPort(advertise, strconv.Itoa(tcpAddr.Port)), handler.HealthPath),
+			Interval:                       consulCheckInterval,
+			Timeout:                        consulCheckTimeout,
+			DeregisterCriticalServiceAfter: consulDeregisterAfter,
+		},
+	}, nil
+}
+
+// serviceID combina el nombre del servicio con el hostname del contenedor y el
+// puerto: dos réplicas nunca comparten ID aunque corran en la misma red.
+func serviceID(hostname string, port int) string {
+	if hostname == "" {
+		hostname = "local"
+	}
+	return fmt.Sprintf("%s-%s-%d", consulServiceName, hostname, port)
+}
+
+// buildTags traduce a tags de Consul el ruteo que antes vivía en labels Docker.
+// Sin traefik.enable=true, Traefik ignora el servicio (exposedByDefault=false).
+func buildTags(port int) []string {
+	portTag := strconv.Itoa(port)
+	return []string{
+		"traefik.enable=true",
+		"traefik.http.routers.orchestrator.entrypoints=https",
+		"traefik.http.routers.orchestrator.rule=Host(`" + publicHost + "`) && Path(`" + handler.ProcessPath + "`)",
+		"traefik.http.routers.orchestrator.tls=true",
+		"traefik.http.routers.orchestrator.middlewares=orchestrator-retry",
+		"traefik.http.services.orchestrator.loadbalancer.server.port=" + portTag,
+		"traefik.http.services.orchestrator.loadbalancer.healthcheck.path=" + handler.HealthPath,
+		"traefik.http.services.orchestrator.loadbalancer.healthcheck.interval=10s",
+		"traefik.http.services.orchestrator.loadbalancer.healthcheck.timeout=3s",
+		"traefik.http.middlewares.orchestrator-retry.retry.attempts=2",
+		"traefik.http.middlewares.orchestrator-retry.retry.initialinterval=500ms",
+	}
 }
 
 // newResolver elige la implementación de descubrimiento según DISCOVERY. El
