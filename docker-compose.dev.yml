@@ -20,6 +20,10 @@ services:
     environment:
       PDFEXTRACTOR_PORT: "9000"
       PDFEXTRACTOR_MIN_TEXT_LENGTH: "0"
+      # Registro en Consul (el agente vive en la red `mired`): la instancia
+      # anuncia su IP y un check GET /health; Traefik arma el router con tags.
+      PDFEXTRACTOR_CONSUL_ENABLED: "true"
+      PDFEXTRACTOR_CONSUL_HTTP_ADDR: http://consul:8500
     networks:
       - mired
 
