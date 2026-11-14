@@ -39,17 +39,17 @@ a Extracción ni a Persistencia.
 ## Requisitos
 
 - Go ≥ 1.26 (`go.mod`); la imagen se compila con `golang:1.27-bookworm`.
-- Docker Engine con Compose v2 para construir/publicar la imagen y levantar el stack local.
-- Opcional: Consul (stack local) para `DISCOVERY=consul`; sin él se puede usar
-  `DISCOVERY=static`.
+- Docker Engine con Compose v2 para construir la imagen y levantar el stack local.
+- Para el flujo completo: Traefik, MongoDB y Consul levantados aparte (no forman parte de
+  este repo; ver *Puesta en marcha local*). Con `DISCOVERY=consul` el Orquestador necesita
+  Consul disponible.
 - Opcional: `k6` y `vegeta` para las pruebas de carga, y `grype` para el escaneo de
   vulnerabilidades.
 
 ## Cómo correr
 
 ```bash
-# Modo estático (sin Consul): las dos URLs downstream son obligatorias.
-export DISCOVERY=static
+# Los dos downstream son obligatorios: el arranque falla sin ellos.
 export EXTRACTOR_URL=http://localhost:8000
 export PERSISTENCE_URL=http://localhost:8081
 
@@ -62,46 +62,28 @@ go build -o bin/orchestrator ./cmd/orchestrator
 ./bin/orchestrator
 ```
 
-Si no se define `DISCOVERY`, el binario arranca en `static`. En modo `consul`
-las URLs fijas no se usan: alcanza con `DISCOVERY=consul` y
-`CONSUL_HTTP_ADDR=http://consul:8500`, y el Orquestador se registra en Consul
-con sus tags de Traefik.
-
 ### Con Docker
 
 La imagen se construye desde este repositorio con un build multi-stage: compila
 como root en la etapa `builder` (que se descarta) y ejecuta únicamente el binario
 como usuario **no-root** sobre una base **distroless** (sin shell ni gestor de
-paquetes). La configuración **se pasa en runtime**; no queda embebida en la imagen.
+paquetes). `EXTRACTOR_URL` y `PERSISTENCE_URL` son obligatorias y **se pasan en
+runtime**; no quedan embebidas en la imagen.
 
 ```bash
-# Build local versionado con el SHA corto del commit (tag `dev-<sha>`).
-make docker-build
+docker build -t papersoul-orchestrator:local .
 
-# O fijá una versión explícita:
-make docker-build VERSION=v0.1.0
-
-# Modo estático (sin Consul):
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -e DISCOVERY=static \
   -e EXTRACTOR_URL=http://extractor:9000 \
   -e PERSISTENCE_URL=http://persistencia:8000 \
-  "papersoul-orchestrator:dev-$(git rev-parse --short HEAD)"
+  papersoul-orchestrator:local
 ```
 
-No se usan tags flotantes (`:local`/`:latest`): cada build queda identificado por una
-versión o por el SHA del commit. Para publicar la imagen en un registry, `make docker-push
-IMAGE=...` (requiere `docker login`). El release oficial se describe en *Publicar una
-imagen versionada*.
-
-En modo `consul` se reemplazan las dos URLs por
-`-e DISCOVERY=consul -e CONSUL_HTTP_ADDR=http://consul:8500` (y el contenedor
-necesita estar en la red de Consul). Las URLs downstream tienen que ser
-resolubles **desde dentro del contenedor** (nombres de servicio en la red de
-Compose, no `localhost` del host).
+Las URLs downstream tienen que ser resolubles **desde dentro del contenedor**
+(nombres de servicio en la red de Compose, no `localhost` del host).
 
 `GET /health` responde 200 mientras el proceso atiende HTTP; sirve como liveness (lo
-consultará Traefik), no como readiness de los downstream:
+consulta Traefik), no como readiness de los downstream:
 
 ```bash
 curl -sS http://localhost:8080/health   # {"status":"ok"}
@@ -123,151 +105,127 @@ docker stop -t 15 <container>
 `docker-compose.yml` despliega **solo el Orquestador** sobre la red externa
 `mired` (la del stack de Traefik). No incluye Traefik ni los downstream, no
 publica el puerto 8080 al host y no fija `container_name`, así que se puede
-escalar a varias réplicas. La imagen se construye/publica aparte y se referencia con
-`ORCH_IMAGE`, para poder desplegar distintas versiones sin rebuild:
+escalar a varias réplicas. La imagen se construye aparte y se referencia con
+`ORCH_IMAGE`, para poder desplegar distintas versiones:
 
 ```bash
-make docker-build VERSION=v0.1.0
-cp .env.example .env          # ORCH_IMAGE, DISCOVERY y CONSUL_HTTP_ADDR ya vienen listos
-# Ajustá ORCH_IMAGE al tag que construiste (o al publicado en GHCR).
-docker compose up -d
+docker build -t papersoul-orchestrator:v1 .
+cp .env.example .env          # completar EXTRACTOR_URL y PERSISTENCE_URL
+ORCH_IMAGE=papersoul-orchestrator:v1 docker compose up -d
 
 # escalar a N réplicas sin editar el archivo
 docker compose up -d --scale orchestrator=3
 ```
 
-`ORCH_IMAGE` es obligatoria: el Compose no tiene `build:` ni un default flotante. Si
-falta, Compose falla con un mensaje explícito en vez de arrancar una imagen vieja. Para
-producción conviene fijarla por digest (`ghcr.io/...@sha256:...`), no solo por tag.
-
-El Compose fija `DISCOVERY=consul` por defecto y `CONSUL_HTTP_ADDR=http://consul:8500`.
-En ese modo `EXTRACTOR_URL` y `PERSISTENCE_URL` son opcionales: no se usan, así
-que pueden quedar vacías. Para integrar por etapas sin Consul, arrancá con
-`DISCOVERY=static` y definí las dos URLs; sin ellas el arranque falla con un
-mensaje explícito. Es requisito que exista la red `mired` (la crea el stack de
-Traefik); este Compose no la crea ni la elimina.
+`EXTRACTOR_URL` y `PERSISTENCE_URL` son obligatorias: si faltan, Compose falla
+con un mensaje explícito. Es requisito que exista la red `mired` (la crea el
+stack de Traefik); este Compose no la crea ni la elimina.
 
 Para probar el flujo completo en local está `docker-compose.dev.yml`, que agrega
-los downstream Extractor y Persistencia a partir de sus imágenes ya construidas.
-Consul, Traefik y MongoDB se levantan por separado desde sus propios stacks. El procedimiento
+Extractor y Persistencia a partir de sus imágenes ya construidas. El procedimiento
 completo —MongoDB, red `mired`, variables, build, verificación y teardown— está en
 *Puesta en marcha local (flujo completo)*.
 
-### Publicar una imagen versionada
-
-El repositorio no construye imágenes desde Compose. El release se dispara con un tag
-semántico:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-`.github/workflows/release.yml` corre `make ci`, construye la imagen y la publica en
-GHCR como `ghcr.io/lautaroallolio/papersoul-microservicio-orquestador`, con los tags
-`0.1.0`, `v0.1.0`, `0.1` y `sha-<corto>`. El paquete nace privado: o se hace público
-desde GitHub → Packages, o se ejecuta `docker login ghcr.io` antes de `docker compose up`.
-
-Para un build local sin publicar: `make docker-build` (tag `dev-<sha>`). Para publicar
-desde la máquina: `make docker-build VERSION=v0.1.0` y
-`make docker-push IMAGE=ghcr.io/lautaroallolio/papersoul-microservicio-orquestador:v0.1.0`.
-
-El Compose referencia las imágenes por tag; en producción conviene fijar el digest que
-devuelve el registry (`docker inspect --format '{{index .RepoDigests 0}}' <imagen>`).
-
 ### Puesta en marcha local (flujo completo)
 
-Para probar el flujo real —Traefik + MongoDB + Orquestador + Extractor + Persistencia—
+Para probar el flujo real —MongoDB + Consul + Traefik + Orquestador + Extractor + Persistencia—
 en una máquina de desarrollo. Los comandos de Docker se ejecutan desde la raíz del
 repositorio en WSL/Linux; el `curl` se puede correr desde PowerShell o WSL.
 
-El orden es: **Consul → Traefik → MongoDB → los 3 microservicios**.
+El orden es: **MongoDB → Consul → Traefik → los 3 microservicios** (Traefik lee el catálogo de
+Consul, por eso Consul va antes).
 
 **Prerrequisitos**
 
 - Docker Engine con Compose v2.
-- Los stacks locales de Consul, Traefik y MongoDB (no forman parte de este repo).
-  Consul se inicia independientemente desde `$HOME/docker/consul`, igual que Traefik
-  y MongoDB desde sus directorios. Los tres stacks y las aplicaciones comparten la red
-  externa `mired`. Traefik provee el puerto 443 y el certificado wildcard
-  `*.universidad.localhost`; MongoDB queda accesible como `mongodb:27017` (lo usa
-  Persistencia, no el Orquestador).
-- `docker-compose.dev.yml` en la raíz agrega únicamente los servicios `extractor` y
-  `persistencia` a partir de sus imágenes ya construidas.
+- Los stacks locales de Traefik, MongoDB y Consul (no forman parte de este repo). Traefik
+  provee la red `mired`, el puerto 443 y el certificado wildcard `*.universidad.localhost`, y
+  necesita los providers **Docker** y **Consul Catalog**; MongoDB queda accesible como
+  `mongodb:27017` (lo usa Persistencia, no el Orquestador); Consul debe ser alcanzable como
+  `consul:8500` desde la red `mired` (ver *Descubrimiento de servicios y Consul*).
+- `docker-compose.dev.yml` en la raíz (versionado en este repo): agrega los servicios
+  `extractor` y `persistencia` a partir de sus imágenes ya construidas. No incluye Traefik,
+  MongoDB ni Consul.
 
-**1. Variables de entorno**
+**1. Levantar la infraestructura**
 
-Copiar el ejemplo y completar `MONGODB_URI` antes de usar Compose:
+Ajustar las rutas a los stacks locales (`$HOME/docker/...` es la ubicación habitual en
+este entorno):
+
+```bash
+export MONGO_STACK="$HOME/docker/mongodb"
+export CONSUL_STACK="$HOME/docker/consul"   # ajustar: el Consul no es parte de este repo
+export TRAEFIK_STACK="$HOME/docker/traefik"
+
+# Red compartida (solo la primera vez)
+docker network create mired 2>/dev/null || true
+
+# 1.a MongoDB: lo consume Persistencia
+(cd "$MONGO_STACK" && docker compose up -d)
+
+# 1.b Consul: Extractor y Persistencia se registran acá al arrancar
+(cd "$CONSUL_STACK" && docker compose up -d)
+
+# 1.c Traefik: ruteo, TLS y healthcheck del balanceador (lee el catálogo de Consul)
+(cd "$TRAEFIK_STACK" && docker compose up -d)
+```
+
+Para confirmar que Consul ya eligió líder antes de levantar Traefik (responde un
+`"ip:puerto"` cuando está listo):
+
+```bash
+curl -fsS http://127.0.0.1:8500/v1/status/leader
+```
+
+Esperá a que MongoDB acepte conexiones antes de levantar Persistencia (si tarda,
+Persistencia reintenta). Si Consul todavía no está, Extractor y Persistencia arrancan igual
+y reintentan el registro en segundo plano. Si ya tenés los tres stacks levantados, saltá al
+paso 2.
+
+**2. Variables de entorno**
 
 ```bash
 cp .env.example .env
 ```
 
-El directorio `$HOME/docker/consul/config` debe contener la configuración local de
-Consul. También se incluye [`consul/consul.json.example`](consul/consul.json.example)
-como plantilla sin token. La configuración y los datos reales de Consul permanecen
-en su stack independiente y no se copian a este repositorio.
-
-**2. Levantar la infraestructura**
-
-```bash
-export TRAEFIK_STACK="$HOME/docker/traefik"
-export MONGO_STACK="$HOME/docker/mongodb"
-export CONSUL_STACK="$HOME/docker/consul"
-
-# Red compartida (solo la primera vez)
-docker network create mired 2>/dev/null || true
-
-# 2.a Consul, iniciado desde su propio stack
-(cd "$CONSUL_STACK" && docker compose up -d)
-curl -fsS http://127.0.0.1:8500/v1/status/leader
-
-# 2.b Traefik: ruteo, TLS y healthcheck del balanceador
-(cd "$TRAEFIK_STACK" && docker compose up -d)
-
-# 2.c MongoDB: lo consume Persistencia
-(cd "$MONGO_STACK" && docker compose up -d)
-```
-
-Esperá a que MongoDB acepte conexiones antes de levantar Persistencia (si tarda,
-Persistencia reintenta). Si ya tenés la infraestructura levantada, saltá al paso 3.
-Las URLs se resuelven por nombre de servicio dentro de la red; no uses `localhost`.
-El flujo completo usa descubrimiento por Consul:
+Completar en `.env` (las URLs se resuelven por nombre de servicio dentro de la red;
+no uses `localhost`):
 
 ```dotenv
 DISCOVERY=consul
-CONSUL_HTTP_ADDR=http://consul:8500
+EXTRACTOR_URL=http://extractor:9000
+PERSISTENCE_URL=http://persistencia:8000
+ORCH_IMAGE=papersoul-orchestrator:v1.0.0
+ORCH_REPLICAS=3
 MONGODB_URI=mongodb://<usuario>:<clave>@mongodb:27017/papersoul?authSource=admin
-ORCH_IMAGE=papersoul-orchestrator:dev-<sha>
-ORCH_REPLICAS=2
-EXTRACTOR_IMAGE=pdfextractor:v1.0.0
+EXTRACTOR_IMAGE=papersoul-pdfextractor:v1.0.0
 PERSISTENCIA_IMAGE=papersoul-persistencia:v1.0.0
 ```
 
-Con `DISCOVERY=consul`, `EXTRACTOR_URL` y `PERSISTENCE_URL` quedan fuera: el
-Orquestador encuentra las instancias en el catálogo. Para una prueba sin Consul,
-cambiá a `DISCOVERY=static` y descomentá las dos URLs en `.env`. Las tres imágenes
-se referencian por versión concreta: `ORCH_IMAGE` no tiene default y el override
-local exige `EXTRACTOR_IMAGE` y `PERSISTENCIA_IMAGE`.
-
-`MONGODB_URI` lo consume el override local y está comentada en `.env.example`:
-descomentala y completá las credenciales.
+`MONGODB_URI` la consume el override local (Persistencia): completá las credenciales reales
+solo en tu `.env`, que no se versiona. `EXTRACTOR_IMAGE` y `PERSISTENCIA_IMAGE` fijan las
+etiquetas de las imágenes downstream que usa el override.
 
 **3. Construir las imágenes**
 
 ```bash
-# Orquestador: tag versionado con el SHA (o VERSION=v0.1.0).
-make docker-build
-
-# Downstream: cada repo define su versión; no usar :latest.
-docker build -t pdfextractor:v1.0.0 ../PaperSoul-Microservicio-Extractor
+docker build -t papersoul-orchestrator:v1.0.0 .
+docker build -t papersoul-pdfextractor:v1.0.0 ../PaperSoul-Microservicio-Extractor
 docker build -t papersoul-persistencia:v1.0.0 ../PaperSoul-Microservicio-Persistencia
 ```
 
-El script `dev-up.sh` del proyecto padre construye tags `:local`/`:latest`; para el
-flujo versionado usá los comandos de arriba y apuntá `ORCH_IMAGE`, `EXTRACTOR_IMAGE` y
-`PERSISTENCIA_IMAGE` a esos tags. Una imagen vieja responde con un contrato viejo
-aunque el código en disco ya esté corregido.
+Usá las mismas etiquetas que figuran en tu `.env` (`ORCH_IMAGE`, `EXTRACTOR_IMAGE`,
+`PERSISTENCIA_IMAGE`).
+
+`docker-compose.dev.yml` solo referencia imágenes ya construidas: si el tag existe, Compose
+lo reutiliza. Después de traer cambios de código hay que reconstruir la imagen que cambió
+(comandos de arriba) y recrear el servicio, por ejemplo:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate extractor
+```
+
+Una imagen vieja responde con un contrato viejo aunque el código en disco ya esté corregido.
 
 **4. Levantar los 3 microservicios**
 
@@ -276,32 +234,13 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
 ```
 
-Este comando levanta el Orquestador + Extractor + Persistencia sobre la red `mired`;
-Consul, Traefik y MongoDB ya están arriba desde el paso 2. Quedan las réplicas del
-Orquestador (`ORCH_REPLICAS`, default 2) más 3 de Extractor y 3 de Persistencia. El
-Orquestador **no publica el 8080**: se llega únicamente por Traefik.
+Este comando levanta Orquestador + Extractor + Persistencia sobre la red `mired`; Traefik,
+MongoDB y Consul ya están arriba desde el paso 1. Extractor y Persistencia se registran en
+Consul con sus defaults (registro activado, agente en `http://consul:8500`). Quedan las
+réplicas del Orquestador (`ORCH_REPLICAS`) más 3 de Extractor y 3 de Persistencia. El Orquestador
+**no publica el 8080**: se llega únicamente por Traefik.
 
-**5. Verificar el registro en Consul y el liveness**
-
-Cada réplica se registra como `orchestrator` con un ID único
-(`orchestrator-<hostname>-<puerto>`). El catálogo debe listar solo instancias
-`passing`:
-
-```bash
-# Instancias sanas de las tres aplicaciones
-curl -fsS 'http://127.0.0.1:8500/v1/health/service/orchestrator?passing' | jq 'length'
-curl -fsS 'http://127.0.0.1:8500/v1/health/service/extractor?passing' | jq 'length'
-curl -fsS 'http://127.0.0.1:8500/v1/health/service/persistencia?passing' | jq 'length'
-
-# Detalle de una instancia: Address, Port, Tags y Check
-curl -fsS 'http://127.0.0.1:8500/v1/health/service/orchestrator?passing' \
-  | jq '.[0] | {Service: {ID: .Service.ID, Address: .Service.Address, Port: .Service.Port, Tags: .Service.Tags}, Checks: [.Checks[].Status]}'
-```
-
-El check es `GET /health` cada 3 s con timeout de 1 s; si una réplica queda
-crítica más de 1 min, Consul la desregistra sola. Si el registro no aparece,
-revisá `docker compose ... logs orchestrator` y que `CONSUL_HTTP_ADDR` apunte al
-agente.
+**5. Verificar el liveness**
 
 El router público solo expone `/api/v1/documents/process`; `/health` se consulta
 dentro de la red (la imagen distroless no trae shell ni `curl`):
@@ -313,6 +252,17 @@ docker run --rm --network mired curlimages/curl -sS http://orchestrator:8080/hea
 Respuesta esperada: `{"status":"ok"}`. La URL pública
 `https://orquestador.universidad.localhost/health` devuelve 404 a propósito: no hay
 router para ese path.
+
+**5.b Verificar el registro en Consul**
+
+Cada réplica de Extractor y Persistencia tiene que aparecer registrada:
+
+```bash
+docker run --rm --network mired curlimages/curl -sS http://consul:8500/v1/catalog/services
+```
+
+Deberían figurar `extractor` y `persistencia`. También se ve en los logs de cada servicio
+(`registered in Consul`) y en la UI de Consul.
 
 **6. Probar el endpoint**
 
@@ -347,98 +297,44 @@ entorno *Traefik*, header `Host` y verificación SSL desactivada.
 docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
 # Bajar la infraestructura (opcional)
-(cd "$HOME/docker/consul" && docker compose down)
 (cd "$HOME/docker/traefik" && docker compose down)
+(cd "$HOME/docker/consul" && docker compose down)
 (cd "$HOME/docker/mongodb" && docker compose down)
 ```
 
 **Secuencia resumida** (con `.env` e imágenes ya listas):
 
 ```bash
+(cd "$HOME/docker/mongodb" && docker compose up -d)
 (cd "$HOME/docker/consul" && docker compose up -d)
 (cd "$HOME/docker/traefik" && docker compose up -d)
-(cd "$HOME/docker/mongodb" && docker compose up -d)
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
 **Si algo falla**
 
 - `network mired declared as external, but could not be found` → crear la red.
-- `Definí ORCH_IMAGE...` / `Definí EXTRACTOR_IMAGE...` / `Definí PERSISTENCIA_IMAGE...`
-  → falta la imagen en `.env` o en el entorno. Construila con `make docker-build` y
-  apuntá la variable al tag concreto; no hay default flotante.
-- `pull access denied` o `unauthorized` al bajar de `ghcr.io` → el paquete está
-  privado: `docker login ghcr.io` o cambiale la visibilidad en GitHub → Packages.
-- `manifest unknown` → el tag no existe en el registry; verificá el release
-  (`git tag`) o el nombre exacto de la imagen.
-- `defina EXTRACTOR_URL` / `defina PERSISTENCE_URL` → estás en `DISCOVERY=static` y
-  falta la variable en `.env`. En modo `consul` esas URLs no se piden.
-- `CONSUL_HTTP_ADDR` / `DISCOVERY` en el error de arranque → falta la variable que
-  exige el modo, o `DISCOVERY` no es `consul` ni `static`.
+- `defina EXTRACTOR_URL` / `defina PERSISTENCE_URL` / `Defina MONGODB_URI` → falta la
+  variable en `.env`.
 - 404 en la URL pública → falta el header `Host` o el path no es exactamente
   `/api/v1/documents/process`.
 - `curl http://localhost:8080` no responde → el Compose no publica el puerto; usá
   Traefik o `docker run -p 8080:8080`.
-- 502 `extractor-unavailable` / `persistence-unavailable` en modo `consul` →
-  revisá que la instancia esté `passing` en Consul y que el check apunte al puerto
-  correcto. Un fallo de lookup de Consul también se reporta como 502 (no 504): el
-  504 queda reservado para el timeout del downstream.
-- 502 intermitente con réplicas caídas → el catálogo cachea 1 s y Traefik refresca
-  cada 5 s: durante esa ventana puede caer una request en una instancia muerta. El
-  único reintento automático es por error de dial.
-- 502/504 general → downstream no disponible:
+- 502/504 → downstream no disponible:
   `docker compose -f docker-compose.yml -f docker-compose.dev.yml logs extractor persistencia orchestrator`.
-- La instancia no aparece en Consul → el registro se reintenta con backoff en
-  background; mirá los logs y que el contenedor esté en `mired`. Un registro nuevo
-  puede tardar hasta `refreshInterval` (5 s) en reflejarse en Traefik.
+- `could not register ... in Consul` en los logs de Extractor o Persistencia → Consul no es
+  alcanzable en `consul:8500` desde `mired` (o está en otra dirección: ver las variables de
+  *Descubrimiento de servicios y Consul*). Extractor y Persistencia siguen funcionando y
+  reintentan el registro con backoff, pero con `DISCOVERY=consul` el Orquestador y Traefik sí
+  dependen de Consul: levantalo y esperá a que tenga líder antes que los servicios.
 - Error de certificado → `-k` en curl, `--insecure-skip-tls-verify` en k6,
   `-insecure` en Vegeta.
 
 ## Integración con Traefik
 
 La instancia Traefik se despliega por separado —**este Compose no la inicia ni la
-modifica**— y usa el provider **Consul Catalog** para los servicios registrados en
-Consul. Mantiene también los providers Docker y File: Docker sigue exponiendo la UI de
-Consul por sus labels. Las aplicaciones ya **no llevan labels de Traefik**: su ruteo
-viaja como tags del registro en Consul.
-
-La configuración estática que se agrega en
-`$HOME/docker/traefik/config/traefik.yml` es (bloque **Apéndice A** del plan de
-integración, sin token):
-
-```yaml
-providers:
-  consulCatalog:
-    endpoint:
-      address: consul:8500
-    exposedByDefault: false
-    refreshInterval: 5s
-```
-
-Con `exposedByDefault: false`, un servicio sin `traefik.enable=true` se ignora: por
-eso el Orquestador incluye esa tag en cada registro. El descubrimiento se basa en
-polling por `refreshInterval` (más `providersThrottleDuration`, 2 s por defecto); no se
-configura `watch`. El Compose local declara `traefik:v3.7.12`. Los puertos publicados de
-Traefik y Consul se limitan a `127.0.0.1`; la UI de Consul también está disponible
-bajo el host TLS `consul.universidad.localhost`.
-
-El registro del Orquestador publica estas tags (idénticas en todas las réplicas):
-
-```text
-traefik.enable=true
-traefik.http.routers.orchestrator.entrypoints=https
-traefik.http.routers.orchestrator.rule=Host(`orquestador.universidad.localhost`) && Path(`/api/v1/documents/process`)
-traefik.http.routers.orchestrator.tls=true
-traefik.http.routers.orchestrator.middlewares=orchestrator-retry
-traefik.http.services.orchestrator.loadbalancer.server.port=<puerto real del listener>
-traefik.http.services.orchestrator.loadbalancer.healthcheck.path=/health
-traefik.http.services.orchestrator.loadbalancer.healthcheck.interval=10s
-traefik.http.services.orchestrator.loadbalancer.healthcheck.timeout=3s
-traefik.http.middlewares.orchestrator-retry.retry.attempts=2
-traefik.http.middlewares.orchestrator-retry.retry.initialinterval=500ms
-```
-
-Efecto en Traefik:
+modifica**— y descubre a las réplicas por el **Docker provider** leyendo los labels del
+contenedor:
 
 - **URL pública**: `https://orquestador.universidad.localhost/api/v1/documents/process`.
 - **TLS**: el router usa el entrypoint `https` con `tls=true` **sin certresolver**: sirve el
@@ -449,27 +345,47 @@ Efecto en Traefik:
   la réplica que falle queda fuera de la rotación y vuelve sola cuando recupera el liveness.
   El router público **no** expone `/health`: solo matchea
   `Host(...) && Path('/api/v1/documents/process')`. El healthcheck es interno, contra el
-  puerto del contenedor. Es independiente del check de Consul (3 s/1 s) que decide si la
-  instancia está `passing` en el catálogo.
-- **Balanceo**: todas las réplicas se registran con el nombre de servicio `orchestrator`
-  y un ID único (`orchestrator-<hostname>-<puerto>`); Consul Catalog las agrupa y Traefik
-  reparte las requests entre las sanas. No hay `container_name` ni puertos publicados al
-  host.
-- **Retry**: middleware `orchestrator-retry`, `attempts=2` (**2 intentos totales = 1
-  reintento**) con `initialInterval=500ms`. Traefik reintenta un error de **dial** —la
-  conexión no llegó a enviar bytes— incluso para `POST`, y elige otra instancia si la hay.
-  **No** reintenta respuestas `5xx` ni `503` en `POST`: para eso haría falta
-  `retryNonIdempotentMethod=true` y bufferizar el body (`maxRequestBodyBytes`, 2 MB por
-  defecto), lo que este endpoint no usa por el tamaño de los PDFs. La deduplicación por
-  checksum deja el endpoint idempotente y seguro para reintentos del cliente.
-- **IP anunciada**: el registro usa la IP del contenedor en `mired`. Si el contenedor
-  tiene varias redes, definí `ORCH_ADVERTISE_ADDR`; si no, se autodetecta la primera IPv4
-  no loopback.
+  puerto del contenedor.
+- **Balanceo**: las réplicas comparten el nombre de servicio del balanceador
+  (`orchestrator`): Traefik las agrupa y reparte las requests entre las sanas. No hay
+  `container_name` ni puertos publicados al host.
+- **Retry**: middleware `orchestrator-retry`, `attempts=2` con `initialInterval=500ms`.
+  Limitación de Traefik v3.5: reintenta solo cuando el backend no responde (fallo de
+  conexión/sin respuesta), **no** reintenta `5xx` ni `POST` con cuerpo, así que **no** es una
+  garantía de reejecución en otra instancia. El endpoint es seguro de reintentar igual por la
+  deduplicación por checksum.
 
 Para ejercitar el endpoint publicado, las herramientas usan la URL del host (ver *Pruebas de
 carga*): alcanza con `ORCH_BASE_URL=https://orquestador.universidad.localhost` en k6, o
 `ORCH_BASE_URL=https://127.0.0.1` + `ORCH_HOST_HEADER=orquestador.universidad.localhost` si
 no hay resolución DNS.
+
+## Descubrimiento de servicios y Consul
+
+La variable `DISCOVERY` define cómo se resuelven los servicios:
+
+| Valor | Comportamiento |
+|---|---|
+| `consul` | El Orquestador y Traefik descubren los servicios por Consul. Requiere un agente Consul accesible desde la red `mired` y con líder antes de levantar los servicios. |
+| `static` | Sin Consul. Se usan las URLs fijas `EXTRACTOR_URL` y `PERSISTENCE_URL` (por DNS de Docker en `mired`). |
+
+**Registro de Extractor y Persistencia**
+
+- Al arrancar, cada réplica se registra en el agente Consul con su IP, su puerto, un check HTTP
+  cada 3 s y los tags de Traefik (router, TLS, retry, puerto). Al apagarse se desregistra.
+- Si Consul no está disponible, el servicio arranca igual y reintenta en segundo plano con
+  backoff exponencial (hasta 30 s entre intentos).
+- El check del Extractor es `GET /health` (liveness); el de Persistencia es `GET /ready`.
+- Routers: `extractor.universidad.localhost` y `persistencia.universidad.localhost` (solo `GET`).
+- El agente es el del entorno (`consul:8500` por defecto), no forma parte de este repo.
+
+| | Extractor | Persistencia |
+|---|---|---|
+| Activar/desactivar el registro (default `true`) | `PDFEXTRACTOR_CONSUL_ENABLED` | `CONSUL_ENABLED` |
+| Dirección del agente (default `http://consul:8500`) | `PDFEXTRACTOR_CONSUL_HTTP_ADDR` | `CONSUL_HTTP_ADDR` |
+
+Para desarrollo sin Consul: `DISCOVERY=static` en el Orquestador y el registro desactivado en
+Extractor y Persistencia.
 
 ## Configuración
 
@@ -484,19 +400,12 @@ equivocados.
 | `ORCH_MAX_BODY_BYTES` | `ORCH_MAX_FILE_SIZE` + 64 KiB | Tope duro del request completo (sobre multipart). |
 | `ORCH_VALIDATION_RELAXED` | `true` | `true` = `ValidationRelaxed` de pdfcpu (tolera xrefs reconstruidas); `false` = `ValidationStrict`. |
 | `ORCH_MAX_CONCURRENCY` | `8` | Requests en vuelo sobre `/api/v1/documents/process`. Al saturarse responde 503 + `Retry-After: 1` (no encola). `/health` no compite por slot. |
-| `DISCOVERY` | `static` (binario) / `consul` (Compose) | Cómo se encuentran los downstream: `consul` consulta el catálogo; `static` usa las URLs fijas y no toca Consul. Cualquier otro valor impide arrancar. |
-| `CONSUL_HTTP_ADDR` | — | **Requerida en modo `consul`.** Base de la API HTTP de Consul (`http://consul:8500` o `consul:8500`). |
-| `ORCH_ADVERTISE_ADDR` | autodetectada | IP con la que la instancia se anuncia en Consul. Solo hace falta si el contenedor tiene varias redes. |
-| `EXTRACTOR_URL` | — | **Requerida solo en modo `static`.** Base URL del microservicio de Extracción. En `consul` no se usa. |
+| `DISCOVERY` | — | `consul` (descubrimiento por Consul para el Orquestador y Traefik) o `static` (sin Consul; usa `EXTRACTOR_URL` y `PERSISTENCE_URL`). |
+| `EXTRACTOR_URL` | — | **Requerida.** Base URL del microservicio de Extracción. |
 | `EXTRACTOR_TIMEOUT` | `30s` | Deadline de la llamada al Extractor. Vencido → 504. |
-| `PERSISTENCE_URL` | — | **Requerida solo en modo `static`.** Base URL del microservicio de Persistencia. En `consul` no se usa. |
+| `PERSISTENCE_URL` | — | **Requerida.** Base URL del microservicio de Persistencia. |
 | `PERSISTENCE_TIMEOUT` | `15s` | Deadline de la llamada a Persistencia. Vencido → 504. |
-| `ORCH_SHUTDOWN_TIMEOUT` | `10s` | Margen del cierre graceful tras SIGINT/SIGTERM (incluye el desregistro de Consul). |
-
-En modo `consul` el Orquestador consulta `GET /v1/health/service/{nombre}?passing`,
-cachea el catálogo 1 s por servicio, colapsa consultas concurrentes y reparte con
-round-robin. Si Consul no responde, la llamada falla con 502 (no hay fallback
-silencioso a las URLs fijas); el 504 queda reservado al timeout del downstream.
+| `ORCH_SHUTDOWN_TIMEOUT` | `10s` | Margen del cierre graceful tras SIGINT/SIGTERM. |
 
 Memoria: el pico por request es `ORCH_MAX_FILE_SIZE` más el contexto de pdfcpu, y
 `ORCH_MAX_CONCURRENCY` acota el total. Subir el tamaño sin bajar la concurrencia sube el
@@ -615,9 +524,8 @@ contra vulnerabilidades conocidas. Ejecutar desde la raíz del repositorio.
 **Imagen Docker del Orquestador** (SO base + binario):
 
 ```bash
-make docker-build
-IMAGE="papersoul-orchestrator:dev-$(git rev-parse --short HEAD)"
-grype "$IMAGE"
+docker build -t papersoul-orchestrator:local .
+grype papersoul-orchestrator:local
 ```
 
 **Filesystem del proyecto Go** (dependencias de `go.mod`/`go.sum`):
@@ -636,7 +544,7 @@ Para que el comando falle solo con severidades altas (útil en CI), `--fail-on` 
 código 2 cuando encuentra una vulnerabilidad de esa severidad o mayor:
 
 ```bash
-grype "$IMAGE" --fail-on high
+grype papersoul-orchestrator:local --fail-on high
 ```
 
 `grype db update` actualiza la base de vulnerabilidades antes de escanear.
@@ -648,25 +556,36 @@ grype "$IMAGE" --fail-on high
 - **Límites del servidor**: `ReadHeaderTimeout` 5s (slowloris) e `IdleTimeout` 60s. No hay
   `WriteTimeout` a propósito: la extracción puede tardar hasta `EXTRACTOR_TIMEOUT` y un timeout
   de escritura cortaría requests legítimos.
-- **Cierre**: con SIGINT/SIGTERM deja de aceptar conexiones, espera hasta
-  `ORCH_SHUTDOWN_TIMEOUT` a que terminen los requests en vuelo y, en modo `consul`,
-  desregistra la instancia del catálogo (con un timeout propio de 2 s).
+- **Cierre**: con SIGINT/SIGTERM deja de aceptar conexiones y espera hasta
+  `ORCH_SHUTDOWN_TIMEOUT` a que terminen los requests en vuelo.
 - **Liveness en `GET /health`**: responde 200 si el proceso atiende HTTP, sin consultar los
   downstream. Es liveness, no readiness: nunca debe usarse para asumir que el procesamiento
-  va a funcionar. En modo `consul` es también el check que mantiene la instancia `passing`.
-- **Reintentos**: no se repite una petición ya enviada (timeout, 5xx o error posterior al
-  envío). La única excepción es un error de **dial** —la petición nunca salió—: se resuelve
-  otra instancia, se reconstruye el request y se reintenta una sola vez. La deduplicación por
-  checksum hace seguros los reintentos del cliente. El retry de Traefik aguas arriba cubre
-  el mismo caso de dial (una vez) y elige otra réplica; no reintenta `5xx`/`503`.
+  va a funcionar.
+- **Sin reintentos automáticos en el servicio**: la deduplicación por checksum hace seguros
+  los reintentos del cliente. El retry solo lo aporta Traefik aguas arriba (ver *Integración
+  con Traefik*) y no garantiza reejecución en otra instancia.
 - **Sin autenticación** entre microservicios: fuera del alcance de esta fase.
 
-## Pendiente de coordinar
+## Contratos con los otros servicios
 
-- **Contrato del Extractor**: se asume `POST /api/v1/extractions` con `multipart/form-data`
-  (parte `file` + campo `checksum`) y el header `X-Document-Checksum`. No hay OpenAPI del
-  Extractor en este repo; si espera otros nombres, se ajusta en un commit chico.
-- **Auth / rate-limit** entre microservicios en el deploy real: sin definir.
+El Orquestador usa estos contratos, verificados contra la documentación de cada repo
+(`docs/api-contract.md` del Extractor y el README de Persistencia):
+
+- **Extractor**: `POST /api/v1/extractions` con `multipart/form-data` (parte `file` más campo
+  `checksum`) y el header `X-Document-Checksum`, que el Extractor tolera. Responde 200 con
+  `extracted_text` (Markdown), `extraction_method` y `page_count`.
+- **Persistencia**: `GET /api/v1/documents/by-checksum/{sha256}` (dedup) y
+  `POST /api/v1/documents` (alta; 409 si el checksum ya existe).
+
+Pendiente: **auth / rate-limit** entre microservicios en el deploy real, sin definir.
+
+## Limitaciones conocidas
+
+- **PDFs sin capa de texto (escaneados)**: el Extractor lee el texto con PyMuPDF y no hace OCR.
+  Con `PDFEXTRACTOR_MIN_TEXT_LENGTH=0` (valor del stack local) un PDF escaneado se acepta y el
+  Orquestador responde `PROCESSED`, pero `extracted_text` queda vacío o con solo saltos de
+  línea. Persistencia declara `extracted_text` como no vacío (mínimo 1 carácter), así que si se
+  quiere rechazar estos PDFs de forma explícita hay que definirlo entre Extractor y Persistencia.
 
 ## Pruebas de carga
 
@@ -747,25 +666,27 @@ final, sin ocultar lo que no está resuelto.
 | # | Factor | Cumplimiento | Evidencia verificable |
 |---|---|---|---|
 | 1 | Codebase (una base de código) | Una base por microservicio. Todos los cambios de despliegue son del repo Orquestador; el Compose referencia imágenes y no modifica repos ajenos (el override local solo agrega downstream ya construidos). | Repo git; `docker-compose.yml` (sin `build:`); `docker-compose.dev.yml` (referencia imágenes de `../PaperSoul-*`). |
-| 2 | Dependencias (declaradas y aisladas) | Declaradas en `go.mod`/`go.sum`; se descargan solo en la etapa builder como capa cacheada; el runtime distroless lleva únicamente el binario, sin gestor de paquetes ni herramientas. CI resuelve Go desde `go.mod`. | `go.mod`; `Dockerfile:11-12` (`go mod download`), `Dockerfile:26` (distroless); `.github/workflows/ci.yml` (`go-version-file: go.mod`). |
-| 3 | Config (en el entorno) | Toda la configuración operativa por variables de entorno (`internal/platform/config/config.go`). Fallo rápido si falta/inválida (`errors.Join`) y validación por modo: `static` exige las URLs, `consul` exige `CONSUL_HTTP_ADDR`. `.env` no se versiona; la imagen no embebe configuración (solo el `ORCH_ADDR` operativo por defecto); no hay secretos embebidos. | `internal/platform/config/config.go`; `Dockerfile:44`; `.gitignore:151` (`.env`); `.env.example`; `docker-compose.yml` (bloque `environment`, líneas 18-35). |
-| 4 | Backing services (recursos adheridos) | Extracción y Persistencia se tratan como servicios conectables: en modo `consul` se descubren por el catálogo y en `static` por URL, sin distinguir local de remoto. La red `mired` es externa y Traefik se despliega aparte. Mongo queda dentro del repo de Persistencia (ajeno, no verificado aquí). | `cmd/orchestrator/main.go` (`newResolver`); `internal/platform/discovery/`; `internal/client/resolver.go`; `docker-compose.yml` (red `external: true`). |
-| 5 | Build, release, run | Build reproducible por `Dockerfile` multi-stage; release = tag semántico que publica la imagen en GHCR (`release.yml`), referenciada luego por `ORCH_IMAGE` en Compose (separada del `run`); run = contenedor con configuración por entorno. La imagen lleva labels OCI con versión y commit. | `Dockerfile:28-38` (labels OCI); `.github/workflows/release.yml`; `Makefile` (`docker-build`/`docker-push`); `docker-compose.yml:16` (`image: ${ORCH_IMAGE:?...}`). |
+| 2 | Dependencias (declaradas y aisladas) | Declaradas en `go.mod`/`go.sum`; se descargan solo en la etapa builder como capa cacheada; el runtime distroless lleva únicamente el binario, sin gestor de paquetes ni herramientas. CI resuelve Go desde `go.mod`. | `go.mod`; `Dockerfile:10-12` (`go mod download`), `Dockerfile:26` (distroless); `.github/workflows/ci.yml` (`go-version-file: go.mod`). |
+| 3 | Config (en el entorno) | Toda la configuración operativa por variables de entorno (`internal/platform/config/config.go`). Fallo rápido si falta/inválida (`errors.Join`). `.env` no se versiona; la imagen solo fija `ORCH_ADDR`; no hay secretos embebidos. Compose exige las URLs con `${VAR:?}`. | `internal/platform/config/config.go`; `Dockerfile:32`; `.gitignore:151` (`.env`); `.env.example`; `docker-compose.yml:20,22`. |
+| 4 | Backing services (recursos adheridos) | Extracción y Persistencia se tratan como servicios conectables por URL (`EXTRACTOR_URL`/`PERSISTENCE_URL`), sin distinguir local de remoto. La red `mired` es externa y Traefik se despliega aparte. Mongo queda dentro del repo de Persistencia (ajeno, no verificado aquí). Con `DISCOVERY=consul` el descubrimiento pasa por Consul; con `static` se usan `EXTRACTOR_URL`/`PERSISTENCE_URL`. | `cmd/orchestrator/main.go:51-53` (clientes con `BaseURL` de cfg); `docker-compose.yml:64-69` (red `external: true`). |
+| 5 | Build, release, run | Build reproducible por `Dockerfile` multi-stage; release = imagen referenciada por `ORCH_IMAGE` en Compose (separada del `run`); run = contenedor con configuración por entorno. | `Dockerfile`; `docker-compose.yml:13` (`image: ${ORCH_IMAGE:-...}`). *Brecha: ver abajo.* |
 | 6 | Processes (sin estado) | Proceso sin estado: cada request es dueño de su buffer y no hay estado compartido durable. **Cero almacenamiento intermedio** es un criterio arquitectónico garantizado por escaneo estático (go/ast sobre rutas de producción: sin `os.Create`/`CreateTemp`/`WriteFile`/`OpenFile`/`Remove*` ni SDKs de S3/MinIO). Corre con filesystem `--read-only`. | `internal/service/orchestrator.go:33-39` (doc "No tiene estado"); `internal/handler/process.go:48` (multipart en streaming, no vuelca a disco); `TestE2ENuncaEscribeADisco` en `internal/handler/integration_test.go:512`. |
-| 7 | Port binding | Escucha en `ORCH_ADDR` (default `:8080`) con `net.Listen("tcp", ...)`; `EXPOSE 8080`; el puerto no se publica al host por defecto (lo expone Traefik). | `cmd/orchestrator/main.go:80`; `Dockerfile:46`; `docker-compose.yml` (sin `ports:`). |
-| 8 | Concurrency (escalado por procesos) | Escala por réplicas independientes que se registran en Consul con el mismo nombre de servicio y ID único; Traefik las descubre y balancea. Por proceso, `ORCH_MAX_CONCURRENCY` (default 8) limita requests en vuelo con un semáforo: al saturarse responde `503` + `Retry-After: 1`, sin encolar; `/health` queda exento. | `internal/handler/middleware.go:139-161`; `cmd/orchestrator/main.go:155` (`buildRegistration`); `docker-compose.yml:38-39` (`deploy.replicas`). |
-| 9 | Disposability | Arranque rápido (binario estático, no descarga nada en runtime). SIGTERM/SIGINT → deja de aceptar, `srv.Shutdown` espera hasta `ORCH_SHUTDOWN_TIMEOUT` y en modo `consul` desregistra la instancia; el `stop_grace_period` del contenedor supera ese timeout. Sin estado, una caída no requiere recuperación. | `cmd/orchestrator/main.go:238` (`serve`); `docker-compose.yml:37` (`stop_grace_period`); verificación de la Tarea 2 (`docker stop -t 15` con `ORCH_SHUTDOWN_TIMEOUT=10s`). |
-| 10 | Dev/prod parity | Misma imagen y configuración en local y en el deploy; el override local referencia las **mismas imágenes** (sin `build:`). La única divergencia documentada es que el override agrega los downstream y Mongo locales, que en prod provee el stack de Traefik. | `docker-compose.yml` + `docker-compose.dev.yml` (layering de Compose). |
-| 11 | Logs (flujo de eventos a stdout) | JSON a stdout (`slog.NewJSONHandler(os.Stdout)`): una línea por request con método, path, status, bytes, `duration_ms` y `correlation_id`; los panic loguean el stack al log, nunca al cliente; nada se escribe a archivos. | `cmd/orchestrator/main.go:51`; `internal/handler/middleware.go:81-99` (RequestLogger), `:106-131` (Recoverer); verificación de la Tarea 2 (logs JSON a stdout). |
+| 7 | Port binding | Escucha en `ORCH_ADDR` (default `:8080`) con `net.Listen("tcp", ...)`; `EXPOSE 8080`; el puerto no se publica al host por defecto (lo expone Traefik). | `cmd/orchestrator/main.go:60`; `Dockerfile:34`; `docker-compose.yml` (sin `ports:`). |
+| 8 | Concurrency (escalado por procesos) | Escala por réplicas independientes que comparten servicio en Traefik. Por proceso, `ORCH_MAX_CONCURRENCY` (default 8) limita requests en vuelo con un semáforo: al saturarse responde `503` + `Retry-After: 1`, sin encolar; `/health` queda exento. | `internal/handler/middleware.go:139-161`; `docker-compose.yml:27-28` (`deploy.replicas`). |
+| 9 | Disposability | Arranque rápido (binario estático, no descarga nada en runtime). SIGTERM/SIGINT → deja de aceptar y `srv.Shutdown` espera hasta `ORCH_SHUTDOWN_TIMEOUT`; el `stop_grace_period` del contenedor supera ese timeout. Sin estado, una caída no requiere recuperación. | `cmd/orchestrator/main.go:99-122`; `docker-compose.yml:26` (`stop_grace_period`); verificación de la Tarea 2 (`docker stop -t 15` con `ORCH_SHUTDOWN_TIMEOUT=10s`). |
+| 10 | Dev/prod parity | Misma imagen y configuración en local y en el deploy; el override local referencia las **mismas imágenes** (sin `build:`). La única divergencia documentada es que el override agrega los downstream locales; Traefik, MongoDB y Consul los provee el entorno en ambos casos. | `docker-compose.yml` + `docker-compose.dev.yml` (layering de Compose). |
+| 11 | Logs (flujo de eventos a stdout) | JSON a stdout (`slog.NewJSONHandler(os.Stdout)`): una línea por request con método, path, status, bytes, `duration_ms` y `correlation_id`; los panic loguean el stack al log, nunca al cliente; nada se escribe a archivos. | `cmd/orchestrator/main.go:36`; `internal/handler/middleware.go:81-99` (RequestLogger), `:106-131` (Recoverer); verificación de la Tarea 2 (logs JSON a stdout). |
 | 12 | Admin processes | No hay tareas administrativas (migraciones, mantenimiento, cron) hoy; se documenta su ausencia. Cualquier tarea admin futura debe ejecutarse con el mismo artefacto y configuración. | No existe comando/módulo admin en `cmd/`; ausencia documentada en el plan de despliegue. |
 
 ### Brechas y pendientes
 
-- **El build de la imagen no corre en cada PR**: `.github/workflows/ci.yml` valida solo el
-  toolchain Go (`make ci`); el `docker build` y el push a GHCR viven en `release.yml` y se
-  disparan con tags `v*.*.*`. Un error del Dockerfile se detecta recién al tagear.
-  Recomendación: agregar un `docker build` sin push en PRs.
+- **CI no construye ni publica la imagen**: `.github/workflows/ci.yml` corre solo el toolchain
+  Go (formato, vet, tests, race, integración y contrato OpenAPI); el `docker build`, el
+  versionado de la imagen (tag/registry) y el escaneo con Grype quedan fuera del pipeline.
+  Recomendación: separar un job de build + push por tag semántico y sumar
+  `grype ... --fail-on high`.
 - **Validación final contra el Traefik real**: el balanceo/healthcheck se verificó con un Traefik
   desechable; falta confirmarlo contra la instancia del profesor (`orquestador.universidad.localhost`).
-- **Fronteras ajenas no verificadas aquí**: el contrato del Extractor con `X-Document-Checksum` y el
-  MongoDB de Persistencia son de otros repos (ver *Pendiente de coordinar*).
+- **Fronteras ajenas no verificadas aquí**: el contrato con Extractor y Persistencia se verificó
+  contra la documentación de sus repos (ver *Contratos con los otros servicios*), pero el MongoDB
+  de Persistencia y el registro de Extractor y Persistencia en Consul son de otros repos.
