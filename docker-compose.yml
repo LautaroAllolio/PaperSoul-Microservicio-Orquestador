@@ -15,6 +15,9 @@ services:
     # explícito en vez de arrancar una imagen vieja sin darse cuenta.
     image: ${ORCH_IMAGE:?Definí ORCH_IMAGE con una imagen versionada (p. ej. ghcr.io/lautaroallolio/papersoul-microservicio-orquestador:v0.1.0)}
     restart: unless-stopped
+    # El Orquestador valida y reenvía el PDF en memoria: no escribe a disco.
+    # Si algún día aparece una escritura, el contenedor falla en vez de ocultarla.
+    read_only: true
     environment:
       ORCH_ADDR: ${ORCH_ADDR:-:8080}
       ORCH_MAX_FILE_SIZE: ${ORCH_MAX_FILE_SIZE:-26214400}
@@ -33,6 +36,23 @@ services:
       PERSISTENCE_URL: ${PERSISTENCE_URL:-}
       PERSISTENCE_TIMEOUT: ${PERSISTENCE_TIMEOUT:-15s}
       ORCH_SHUTDOWN_TIMEOUT: ${ORCH_SHUTDOWN_TIMEOUT:-10s}
+      # --- Borde HTTP y registro (defaults idénticos a config.Load) -------------
+      # ORCH_DEREGISTER_TIMEOUT no puede superar ORCH_SHUTDOWN_TIMEOUT.
+      ORCH_RETRY_AFTER: ${ORCH_RETRY_AFTER:-1}
+      ORCH_READ_HEADER_TIMEOUT: ${ORCH_READ_HEADER_TIMEOUT:-5s}
+      ORCH_IDLE_TIMEOUT: ${ORCH_IDLE_TIMEOUT:-60s}
+      ORCH_DEREGISTER_TIMEOUT: ${ORCH_DEREGISTER_TIMEOUT:-2s}
+      ORCH_CONSUL_CHECK_INTERVAL: ${ORCH_CONSUL_CHECK_INTERVAL:-3s}
+      ORCH_CONSUL_CHECK_TIMEOUT: ${ORCH_CONSUL_CHECK_TIMEOUT:-1s}
+      ORCH_CONSUL_DEREGISTER_AFTER: ${ORCH_CONSUL_DEREGISTER_AFTER:-1m}
+      # --- Traefik por tags de Consul (defaults idénticos a config.Load) -------
+      ORCH_PUBLIC_HOST: ${ORCH_PUBLIC_HOST:-orquestador.universidad.localhost}
+      ORCH_TRAEFIK_ENTRYPOINT: ${ORCH_TRAEFIK_ENTRYPOINT:-https}
+      ORCH_TRAEFIK_ROUTER: ${ORCH_TRAEFIK_ROUTER:-orchestrator}
+      ORCH_TRAEFIK_RETRY_ATTEMPTS: ${ORCH_TRAEFIK_RETRY_ATTEMPTS:-2}
+      ORCH_TRAEFIK_RETRY_INTERVAL: ${ORCH_TRAEFIK_RETRY_INTERVAL:-500ms}
+      ORCH_TRAEFIK_HEALTH_INTERVAL: ${ORCH_TRAEFIK_HEALTH_INTERVAL:-10s}
+      ORCH_TRAEFIK_HEALTH_TIMEOUT: ${ORCH_TRAEFIK_HEALTH_TIMEOUT:-3s}
     # Margen mayor que ORCH_SHUTDOWN_TIMEOUT para que el cierre graceful termine.
     stop_grace_period: ${ORCH_STOP_GRACE_PERIOD:-15s}
     deploy:

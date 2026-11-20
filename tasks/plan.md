@@ -88,7 +88,7 @@ la suite verde.
 
 ### Phase 2 — Despliegue y CI
 
-- [ ] **Task 6**: Compose con `read_only` y variables nuevas; `.env.example` alineado.
+- [x] **Task 6**: Compose con `read_only` y variables nuevas; `.env.example` alineado.
 - [ ] **Task 7**: CI construye y escanea imagen sin publicarla.
 - [ ] **Checkpoint 4**: `docker compose config` + build local; workflows revisados.
 

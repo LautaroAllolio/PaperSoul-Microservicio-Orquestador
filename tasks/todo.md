@@ -189,8 +189,7 @@ por la validación cruzada de timeouts)
 ### Checkpoint 3: Registro y descubrimiento
 - [x] Test de tags idénticos con defaults pasando
 - [x] `main.go` reducido a wiring + señales (sin lógica de Consul/Traefik)
-- [ ] **Revisión humana** del diff de registro antes de seguir (alta probabilidad de romper
-      el descubrimiento) — queda pendiente a propósito; no se inicia la Task 6 sin ella.
+- [x] **Revisión humana** del diff de registro (aprobada por el usuario antes de la Task 6).
 
 ---
 
@@ -203,17 +202,21 @@ afirma) y propagar las variables nuevas con los mismos defaults del binario. Act
 `.env.example` con el bloque documentado, sin secretos reales. Factores 3, 6 y 10.
 
 **Acceptance criteria:**
-- [ ] `docker-compose.yml` incluye `read_only: true` y las variables nuevas con defaults
+- [x] `docker-compose.yml` incluye `read_only: true` y las 14 variables nuevas con defaults
       idénticos a `config.go`; se conservan red `mired` externa, réplicas,
       `stop_grace_period` y ausencia de `ports:`/`container_name`.
-- [ ] `.env.example` lista las variables nuevas comentadas, con una nota de que los defaults
-      replican al binario.
-- [ ] `docker compose config` resuelve sin error con `.env` copiado del ejemplo.
+- [x] `.env.example` lista las variables nuevas comentadas, con una nota de que los defaults
+      replican al binario. Se corrigió además el aviso de las URLs downstream: solo son
+      obligatorias con `DISCOVERY=static`.
+- [x] `docker compose config` resuelve sin error usando `--env-file .env.example` (sin crear
+      un `.env` real).
 
 **Verification:**
-- [ ] Build succeeds: `docker compose config --quiet`
-- [ ] Manual check: `docker compose config | grep -A2 read_only`
-- [ ] Manual check: `make integration` (escaneo anti-disco sigue verde con FS read-only)
+- [x] Build succeeds: `docker compose --env-file .env.example config --quiet`.
+- [x] Manual check: `docker compose --env-file .env.example config | grep -A2 read_only`
+      muestra `read_only: true`; el bloque `environment` coincide con los defaults de config.
+- [x] Manual check: `make integration` (escaneo anti-disco verde) y `make vet`/`make test`/
+      `make check-fmt`.
 
 **Dependencies:** Tasks 2 y 5
 
