@@ -29,17 +29,20 @@ líneas de `.gitignore` por una lista mínima Go que conserve todos los ignorado
 Factores 1, 2 y 10.
 
 **Acceptance criteria:**
-- [ ] `Dockerfile` usa `golang:1.26-bookworm`; multi-stage, distroless non-root, `ARG`s,
+- [x] `Dockerfile` usa `golang:1.26-bookworm`; multi-stage, distroless non-root, `ARG`s,
       `ENV ORCH_ADDR` y `ENTRYPOINT` quedan intactos.
-- [ ] `.gitignore` conserva `.env`, `.envrc`, `/bin/`, `/orchestrator`,
+- [x] `.gitignore` conserva `.env`, `.envrc`, `/bin/`, `/orchestrator`,
       `tests/vegeta-generated/`, `/consul/consul.json` y `/consul/data/`; desaparecen las
       reglas de Python/UV/Poetry/Celery/Spyder.
-- [ ] `git status --short` no muestra archivos generados nuevos.
+- [x] `git status --short` no muestra archivos generados nuevos.
 
 **Verification:**
-- [ ] Tests pass: `make ci`
-- [ ] Build succeeds: `docker build -t papersoul-orchestrator:local .`
-- [ ] Manual check: `git check-ignore -v .env bin/orchestrator tests/vegeta-generated/report.json`
+- [x] Tests pass: `make ci` ejecutado por pasos (check-fmt, vet, test, race, integration,
+      lint-openapi) porque el comando único superó el timeout del harness; todos verdes.
+- [x] Build succeeds: `docker build -t papersoul-orchestrator:local .` (confirmado con
+      `golang:1.26-bookworm`).
+- [x] Manual check: `git check-ignore -v .env bin/orchestrator tests/vegeta-generated/report.json`
+      y `.env.example` NO ignorado.
 
 **Dependencies:** None (paralelizable con Task 2)
 
