@@ -80,7 +80,7 @@ la suite verde.
 
 ### Phase 1 — Borde HTTP y composition root
 
-- [ ] **Task 3**: `Retry-After` del 503 configurable.
+- [x] **Task 3**: `Retry-After` del 503 configurable.
 - [ ] **Task 4**: Timeouts del `http.Server` desde configuración.
 - [ ] **Checkpoint 2**: contrato HTTP idéntico; `make ci` + `make integration` verdes.
 - [ ] **Task 5**: Extraer registro en Consul y tags de Traefik del composition root.

@@ -61,7 +61,7 @@ func NewRouter(svc DocumentService, cfg config.Config, logger *slog.Logger) http
 	return RequestID(logger)(
 		RequestLogger(logger)(
 			Recoverer(logger)(
-				MaxConcurrency(cfg.MaxConcurrency, HealthPath)(mux))))
+				MaxConcurrency(cfg.MaxConcurrency, cfg.RetryAfter, HealthPath)(mux))))
 }
 
 func allowFor(path string) string {

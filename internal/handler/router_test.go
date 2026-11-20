@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -137,52 +138,60 @@ func TestRouterMetodoNoPermitidoDevuelve405ConAllow(t *testing.T) {
 }
 
 func TestRouterSaturacionDevuelve503ConRetryAfter(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	svc := stubService{process: func(_ context.Context, _ *domain.ProcessInput) (*domain.ProcessResult, error) {
-		select {
-		case <-entered:
-		default:
-			close(entered)
-		}
-		<-release
-		return &domain.ProcessResult{DocumentID: "doc-1", Status: domain.StatusProcessed, Checksum: "abc"}, nil
-	}}
-	h := newTestRouter(svc, testConfig()) // MaxConcurrency: 1
+	// 1 es el default del binario; 7 comprueba que el valor viene de config.
+	for _, retryAfter := range []int{1, 7} {
+		t.Run(strconv.Itoa(retryAfter), func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			svc := stubService{process: func(_ context.Context, _ *domain.ProcessInput) (*domain.ProcessResult, error) {
+				select {
+				case <-entered:
+				default:
+					close(entered)
+				}
+				<-release
+				return &domain.ProcessResult{DocumentID: "doc-1", Status: domain.StatusProcessed, Checksum: "abc"}, nil
+			}}
+			cfg := testConfig() // MaxConcurrency: 1
+			cfg.RetryAfter = retryAfter
+			h := newTestRouter(svc, cfg)
 
-	primerReq := newRequest(t, true, validPdfBytes(64), nil)
-	primer := httptest.NewRecorder()
-	primerListo := make(chan struct{})
-	go func() {
-		defer close(primerListo)
-		h.ServeHTTP(primer, primerReq)
-	}()
+			primerReq := newRequest(t, true, validPdfBytes(64), nil)
+			primer := httptest.NewRecorder()
+			primerListo := make(chan struct{})
+			go func() {
+				defer close(primerListo)
+				h.ServeHTTP(primer, primerReq)
+			}()
 
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("el primer request nunca entró al servicio")
-	}
+			select {
+			case <-entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("el primer request nunca entró al servicio")
+			}
 
-	segundo := doRouter(h, newRequest(t, true, validPdfBytes(64), nil))
-	if segundo.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, quiero 503 con el semáforo saturado. body=%s", segundo.Code, segundo.Body.String())
-	}
-	if got := segundo.Header().Get("Retry-After"); got != "1" {
-		t.Errorf("Retry-After = %q, quiero %q para que el cliente reintente", got, "1")
-	}
-	if ct := segundo.Header().Get("Content-Type"); ct != "application/problem+json" {
-		t.Errorf("Content-Type = %q, quiero application/problem+json", ct)
-	}
-	p := decodeProblem(t, segundo)
-	if p.Type != problem.TypeOverloaded || p.Status != http.StatusServiceUnavailable {
-		t.Errorf("problem = %+v, quiero type=%s status=503", p, problem.TypeOverloaded)
-	}
+			segundo := doRouter(h, newRequest(t, true, validPdfBytes(64), nil))
+			if segundo.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, quiero 503 con el semáforo saturado. body=%s", segundo.Code, segundo.Body.String())
+			}
+			want := strconv.Itoa(retryAfter)
+			if got := segundo.Header().Get("Retry-After"); got != want {
+				t.Errorf("Retry-After = %q, quiero %q para que el cliente reintente", got, want)
+			}
+			if ct := segundo.Header().Get("Content-Type"); ct != "application/problem+json" {
+				t.Errorf("Content-Type = %q, quiero application/problem+json", ct)
+			}
+			p := decodeProblem(t, segundo)
+			if p.Type != problem.TypeOverloaded || p.Status != http.StatusServiceUnavailable {
+				t.Errorf("problem = %+v, quiero type=%s status=503", p, problem.TypeOverloaded)
+			}
 
-	close(release)
-	<-primerListo
-	if primer.Code != http.StatusOK {
-		t.Fatalf("el primer request = %d, quiero 200: el 503 no debe haberlo afectado", primer.Code)
+			close(release)
+			<-primerListo
+			if primer.Code != http.StatusOK {
+				t.Fatalf("el primer request = %d, quiero 200: el 503 no debe haberlo afectado", primer.Code)
+			}
+		})
 	}
 }
 

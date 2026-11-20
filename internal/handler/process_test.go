@@ -39,6 +39,7 @@ func testConfig() config.Config {
 		MaxBodyBytes:      4096,
 		ValidationRelaxed: true,
 		MaxConcurrency:    1,
+		RetryAfter:        1,
 	}
 }
 

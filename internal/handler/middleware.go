@@ -4,17 +4,13 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"time"
 
 	errorsvc "github.com/papersoul/orchestrator/internal/platform/errors"
 	"github.com/papersoul/orchestrator/internal/platform/problem"
 	"github.com/papersoul/orchestrator/internal/platform/reqid"
 )
-
-// retryAfterSeconds es el Retry-After del 503 por saturación. El orquestador no
-// se auto-recupera: el cliente debe reintentar, y un segundo alcanza para que el
-// semáforo se vacíe en el caso normal de una ráfaga corta.
-const retryAfterSeconds = "1"
 
 // recorder memoriza el status, los bytes escritos y si la respuesta ya empezó.
 // Envuelve el ResponseWriter solo para eso: la API responde JSON, así que no
@@ -134,13 +130,18 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 // Retry-After en vez de encolar: encolado sin límite solo cambia la forma del
 // problema (el cliente igual agota su propio timeout) y el body en memoria crece.
 //
+// retryAfter son los segundos que el cliente debe esperar antes de reintentar.
+// El orquestador no se auto-recupera: con una ráfaga corta alcanza para que el
+// semáforo se vacíe. Se convierte una vez, fuera del camino de cada request.
+//
 // Los paths en exemptPaths (p. ej. el liveness /health) no consumen slot ni se
 // rechazan: su semántica es "el proceso vive", no "hay capacidad de negocio".
-func MaxConcurrency(limit int, exemptPaths ...string) func(http.Handler) http.Handler {
+func MaxConcurrency(limit int, retryAfter int, exemptPaths ...string) func(http.Handler) http.Handler {
 	exempt := make(map[string]struct{}, len(exemptPaths))
 	for _, p := range exemptPaths {
 		exempt[p] = struct{}{}
 	}
+	retryAfterValue := strconv.Itoa(retryAfter)
 	return func(next http.Handler) http.Handler {
 		sem := make(chan struct{}, limit)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +154,7 @@ func MaxConcurrency(limit int, exemptPaths ...string) func(http.Handler) http.Ha
 				defer func() { <-sem }()
 				next.ServeHTTP(w, r)
 			default:
-				w.Header().Set("Retry-After", retryAfterSeconds)
+				w.Header().Set("Retry-After", retryAfterValue)
 				problem.Write(w, r, errorsvc.Map(r, errorsvc.ErrTooManyRequests))
 			}
 		})

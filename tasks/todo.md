@@ -104,21 +104,23 @@ en vez de la constante `retryAfterSeconds`, y `NewRouter` se lo pasa desde `conf
 Mantener el orden de middlewares y la exención de `/health`. Factor 3, KISS.
 
 **Acceptance criteria:**
-- [ ] El 503 por saturación emite `Retry-After` con el valor configurado; con default sigue
+- [x] El 503 por saturación emite `Retry-After` con el valor configurado; con default sigue
       siendo `1`.
-- [ ] `/health` sigue exento del semáforo y todos los errores siguen siendo `problem+json`.
-- [ ] Hay tests para el default y para un valor custom (p. ej. `7`).
+- [x] `/health` sigue exento del semáforo y todos los errores siguen siendo `problem+json`.
+- [x] Hay tests para el default y para un valor custom (`7`), en un único test tabulado.
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/handler/... && make ci`
-- [ ] Build succeeds: `make build`
-- [ ] Manual check: revisar que `rutas`, `RequestID`, `RequestLogger` y `Recoverer` no cambiaron.
+- [x] Tests pass: `go test ./internal/handler/...`, `make vet`, `make test`, `make race`,
+      `make integration` (todos verdes; `make ci` se ejecuta por pasos por el timeout del harness).
+- [x] Build succeeds: `make build` y `make lint-openapi`.
+- [x] Manual check: el diff de `router.go` solo cambia la llamada a `MaxConcurrency`;
+      `rutas`, `RequestID`, `RequestLogger` y `Recoverer` quedan intactos.
 
 **Dependencies:** Task 2
 
-**Files likely touched:** `internal/handler/middleware.go`,
-`internal/handler/middleware_test.go`, `internal/handler/router.go`,
-`internal/handler/router_test.go`
+**Files touched:** `internal/handler/middleware.go`, `internal/handler/router.go`,
+`internal/handler/router_test.go`, `internal/handler/process_test.go` (este último para fijar
+`RetryAfter: 1` en el `testConfig` compartido)
 
 **Estimated scope:** Medium (4 archivos)
 
