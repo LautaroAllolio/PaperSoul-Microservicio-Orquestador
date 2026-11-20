@@ -35,12 +35,14 @@ type httpResult struct {
 
 func testConfig() config.Config {
 	return config.Config{
-		Addr:            "127.0.0.1:0",
-		MaxFileSize:     1024,
-		MaxBodyBytes:    4096,
-		MaxConcurrency:  4,
-		ShutdownTimeout: 2 * time.Second,
-		PublicHost:      "orquestador.universidad.localhost",
+		Addr:              "127.0.0.1:0",
+		MaxFileSize:       1024,
+		MaxBodyBytes:      4096,
+		MaxConcurrency:    4,
+		ShutdownTimeout:   2 * time.Second,
+		PublicHost:        "orquestador.universidad.localhost",
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 }
 
@@ -84,18 +86,33 @@ func startServer(t *testing.T, ctx context.Context, srv *http.Server, timeout ti
 }
 
 func TestNewServerAplicaLosTimeoutsDelBorde(t *testing.T) {
-	srv := newServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	noop := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	srv := newServer(noop, testConfig()) // ReadHeaderTimeout 5s, IdleTimeout 60s
 
-	if srv.ReadHeaderTimeout <= 0 {
-		t.Errorf("ReadHeaderTimeout = %v, quiero un valor > 0 (slowloris)", srv.ReadHeaderTimeout)
+	if srv.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, quiero 5s", srv.ReadHeaderTimeout)
 	}
-	if srv.IdleTimeout <= 0 {
-		t.Errorf("IdleTimeout = %v, quiero un valor > 0", srv.IdleTimeout)
+	if srv.IdleTimeout != 60*time.Second {
+		t.Errorf("IdleTimeout = %v, quiero 60s", srv.IdleTimeout)
 	}
 	// WriteTimeout debe quedar en 0 a propósito: la extracción puede tardar hasta
 	// ORCH_TIMEOUT y un WriteTimeout corto cortaría requests legítimos en vuelo.
 	if srv.WriteTimeout != 0 {
 		t.Errorf("WriteTimeout = %v, quiero 0 (lo acota el timeout del downstream)", srv.WriteTimeout)
+	}
+
+	cfg := testConfig()
+	cfg.ReadHeaderTimeout = 11 * time.Second
+	cfg.IdleTimeout = 120 * time.Second
+	custom := newServer(noop, cfg)
+	if custom.ReadHeaderTimeout != 11*time.Second {
+		t.Errorf("ReadHeaderTimeout custom = %v, quiero 11s", custom.ReadHeaderTimeout)
+	}
+	if custom.IdleTimeout != 120*time.Second {
+		t.Errorf("IdleTimeout custom = %v, quiero 120s", custom.IdleTimeout)
+	}
+	if custom.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout custom = %v, quiero 0", custom.WriteTimeout)
 	}
 }
 
@@ -110,7 +127,7 @@ func TestElLogDelCierreReportaElTimeoutEnMilisegundos(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&registro, nil)))
 	t.Cleanup(func() { slog.SetDefault(anterior) })
 
-	srv := newServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv := newServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), testConfig())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -162,7 +179,7 @@ func TestServeEsperaLosRequestsEnVueloAntesDeCerrar(t *testing.T) {
 		return &domain.ProcessResult{DocumentID: "doc-1", Status: domain.StatusProcessed, Checksum: "abc"}, nil
 	}}
 
-	srv := newServer(handler.NewRouter(svc, testConfig(), logDiscard()))
+	srv := newServer(handler.NewRouter(svc, testConfig(), logDiscard()), testConfig())
 	ctx, cancel := context.WithCancel(context.Background())
 	baseURL, done := startServer(t, ctx, srv, 2*time.Second)
 
@@ -205,7 +222,7 @@ func TestServeAplicaElTimeoutDeCierre(t *testing.T) {
 		return nil, nil
 	}}
 
-	srv := newServer(handler.NewRouter(svc, testConfig(), logDiscard()))
+	srv := newServer(handler.NewRouter(svc, testConfig(), logDiscard()), testConfig())
 	ctx, cancel := context.WithCancel(context.Background())
 	baseURL, done := startServer(t, ctx, srv, 100*time.Millisecond)
 

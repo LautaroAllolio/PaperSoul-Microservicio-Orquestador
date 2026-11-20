@@ -25,13 +25,6 @@ import (
 )
 
 const (
-	// readHeaderTimeout acota el slowloris (headers que llegan lentos) sin
-	// tocar el body: un WriteTimeout corto cortaría requests legítimos cuya
-	// extracción dura hasta ORCH_TIMEOUT, que es justo lo que el cierre
-	// graceful promete no hacer.
-	readHeaderTimeout = 5 * time.Second
-	idleTimeout       = 60 * time.Second
-
 	// Identidad con la que el Orquestador se registra en Consul. El host
 	// público se toma de config (ORCH_PUBLIC_HOST): cubre el wildcard del
 	// certificado y se usa en la regla Host(...) publicada a Traefik.
@@ -72,7 +65,7 @@ func run(logger *slog.Logger) error {
 	persistence := client.NewPersistence(client.Options{Resolver: resolver, Timeout: cfg.PersistenceTimeout})
 	orchestrator := service.NewOrchestrator(extractor, persistence, pdf.New(cfg.ValidationRelaxed))
 
-	srv := newServer(handler.NewRouter(orchestrator, cfg, logger))
+	srv := newServer(handler.NewRouter(orchestrator, cfg, logger), cfg)
 
 	// El listener se abre antes de servir para poder loguear el puerto real
 	// (importa con ORCH_ADDR=127.0.0.1:0) y para no entrar en estado de
@@ -221,12 +214,15 @@ func newResolver(cfg config.Config) (client.Resolver, error) {
 	}
 }
 
-func newServer(h http.Handler) *http.Server {
+func newServer(h http.Handler, cfg config.Config) *http.Server {
 	return &http.Server{
 		Handler:           h,
-		ReadHeaderTimeout: readHeaderTimeout,
-		IdleTimeout:       idleTimeout,
-		// WriteTimeout queda en 0 a propósito; ver readHeaderTimeout.
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		// WriteTimeout queda en 0 a propósito: un corte cortaría requests
+		// legítimos cuya extracción dura hasta el timeout del downstream,
+		// justo lo que el cierre graceful promete no hacer. ReadHeaderTimeout
+		// acota el slowloris sin tocar el body.
 	}
 }
 

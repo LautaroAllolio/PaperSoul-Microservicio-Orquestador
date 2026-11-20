@@ -131,14 +131,16 @@ constantes `readHeaderTimeout`/`idleTimeout`. `WriteTimeout` permanece en 0 a pr
 Factor 3.
 
 **Acceptance criteria:**
-- [ ] Con defaults, `ReadHeaderTimeout = 5s` e `IdleTimeout = 60s`; `WriteTimeout = 0`.
-- [ ] El log de arranque/cierre sigue expresando duraciones en milisegundos vía `milisegundos()`.
-- [ ] Los tests existentes de `newServer` y del shutdown pasan sin cambiar su semántica.
+- [x] Con defaults, `ReadHeaderTimeout = 5s` e `IdleTimeout = 60s`; `WriteTimeout = 0`.
+      Cubierto además con valores custom (11s/120s) para probar que vienen de config.
+- [x] El log de arranque/cierre sigue expresando duraciones en milisegundos vía `milisegundos()`.
+- [x] Los tests existentes de `newServer` y del shutdown pasan sin cambiar su semántica.
 
 **Verification:**
-- [ ] Tests pass: `go test ./cmd/orchestrator/... && make ci`
-- [ ] Build succeeds: `make build`
-- [ ] Manual check: comparar `newServer` con los defaults de config; sin levantar servicios.
+- [x] Tests pass: `go test ./cmd/orchestrator/...`, `make vet`, `make test`, `make race`,
+      `make integration` (verdes).
+- [x] Build succeeds: `make build` y `make lint-openapi`.
+- [x] Manual check: comparar `newServer` con los defaults de config; sin levantar servicios.
 
 **Dependencies:** Task 2 (paralelizable con Task 3)
 
@@ -147,9 +149,10 @@ Factor 3.
 **Estimated scope:** Small (2 archivos)
 
 ### Checkpoint 2: Borde HTTP
-- [ ] `make ci` y `make integration` verdes
-- [ ] Contrato HTTP idéntico: mismos paths, métodos, headers y matriz de status
-- [ ] Sin regresión de logs JSON a stdout
+- [x] `make ci` por pasos y `make integration` verdes
+- [x] Contrato HTTP idéntico: mismos paths, métodos, headers y matriz de status
+      (`api/openapi.yaml` sin cambios; `router.go` solo cambió la llamada a `MaxConcurrency`)
+- [x] Sin regresión de logs JSON a stdout (`milisegundos()` y los handlers de log intactos)
 
 ### Task 5: Extraer registro en Consul y tags de Traefik del composition root
 
