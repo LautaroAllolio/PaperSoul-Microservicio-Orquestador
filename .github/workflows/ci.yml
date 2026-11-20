@@ -46,3 +46,38 @@ jobs:
 
       - name: Contrato OpenAPI
         run: make lint-openapi
+
+  image:
+    name: Construir y escanear imagen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Imagen solo local: CI valida que el Dockerfile compile y que la base no
+      # traiga vulnerabilidades altas. La publicación queda exclusivamente en
+      # release.yml, que se dispara solo con tags v*.*.*.
+      - name: Construir imagen local
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: papersoul-orchestrator:ci
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Equivale a `grype papersoul-orchestrator:ci --fail-on high`: el action
+      # invoca Grype y falla solo desde `high` (medias no bloquean el merge).
+      - name: Escanear imagen con Grype
+        uses: anchore/scan-action@v7
+        with:
+          image: papersoul-orchestrator:ci
+          fail-build: true
+          severity-cutoff: high
+          output-format: table

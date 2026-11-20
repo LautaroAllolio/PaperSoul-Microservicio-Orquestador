@@ -231,16 +231,21 @@ afirma) y propagar las variables nuevas con los mismos defaults del binario. Act
 sin push. `release.yml` queda como único publicador. Factores 5 y 10.
 
 **Acceptance criteria:**
-- [ ] El job nuevo corre `docker build` con build-args y ejecuta Grype sobre la imagen local;
-      no incluye `docker/login-action` ni `push: true`.
-- [ ] `release.yml` no se modifica y sigue publicando solo con tags `v*.*.*`.
-- [ ] El job de imagen no introduce secretos nuevos y no bloquea al job `verify`.
+- [x] El job nuevo construye con `VERSION`/`REVISION`, carga la imagen local y la escanea con
+      `anchore/scan-action@v7` (`fail-build: true`, `severity-cutoff: high`, que invoca Grype).
+      No incluye `docker/login-action` ni `push: true`.
+- [x] `release.yml` no se modifica y sigue publicando solo con tags `v*.*.*`.
+- [x] El job de imagen no introduce secretos nuevos y corre en paralelo a `verify` (sin
+      `needs`), así que no lo bloquea.
 
 **Verification:**
-- [ ] Build succeeds: `docker build -t papersoul-orchestrator:local .`
-- [ ] Manual check: `grype papersoul-orchestrator:local --fail-on high` (si Grype está
-      instalado) o inspección del workflow en su defecto.
-- [ ] Manual check: `git diff .github/workflows/` muestra cambios solo en `ci.yml`.
+- [x] Build succeeds: `docker build --build-arg VERSION=ci-local --build-arg REVISION=local
+      -t papersoul-orchestrator:ci .` (simula el job).
+- [x] Manual check: `grype papersoul-orchestrator:ci --fail-on high -o table` pasó: solo un
+      hallazgo **Medium** en `go-chi/chi/v5 v5.3.2` (fix en 5.4.0), que no bloquea según el
+      criterio acordado. La DB local avisó que está vieja; en CI el action la actualiza.
+- [x] Manual check: `git diff --stat .github/workflows/` muestra cambios solo en `ci.yml`;
+      ambos YAML parsean correctamente.
 
 **Dependencies:** Task 1
 
@@ -249,9 +254,9 @@ sin push. `release.yml` queda como único publicador. Factores 5 y 10.
 **Estimated scope:** Small (1 archivo)
 
 ### Checkpoint 4: Despliegue y pipelines
-- [ ] `docker compose config --quiet` y build local de imagen verdes
-- [ ] Workflows revisados: CI no publica, release sí
-- [ ] Sin regresión en `make ci`
+- [x] `docker compose --env-file .env.example config --quiet` y build local de imagen verdes
+- [x] Workflows revisados: CI no publica (`push: false`), release sí (`push: true` solo en tags)
+- [x] Sin regresión en `make ci` (vet, test, race, integration, lint-openapi, check-fmt)
 
 ---
 
