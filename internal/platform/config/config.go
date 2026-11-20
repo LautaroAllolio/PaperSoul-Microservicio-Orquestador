@@ -248,6 +248,12 @@ func Load() (Config, error) {
 	if cfg.MaxConcurrency <= 0 {
 		errs = append(errs, fmt.Errorf("ORCH_MAX_CONCURRENCY debe ser > 0, got %d", cfg.MaxConcurrency))
 	}
+	// El desregistro ocurre antes de cerrar el servidor: si su presupuesto
+	// fuera mayor que el del shutdown, el cierre graceful excedería el total.
+	if cfg.DeregisterTimeout > cfg.ShutdownTimeout {
+		errs = append(errs, fmt.Errorf("ORCH_DEREGISTER_TIMEOUT (%s) no puede superar ORCH_SHUTDOWN_TIMEOUT (%s)",
+			cfg.DeregisterTimeout, cfg.ShutdownTimeout))
+	}
 
 	// errors.Join descarta los nil: el criterio es el error resultante, no len(errs).
 	if err := errors.Join(errs...); err != nil {

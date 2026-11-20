@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -22,21 +21,6 @@ import (
 	"github.com/papersoul/orchestrator/internal/platform/discovery"
 	"github.com/papersoul/orchestrator/internal/platform/pdf"
 	"github.com/papersoul/orchestrator/internal/service"
-)
-
-const (
-	// Identidad con la que el Orquestador se registra en Consul. El host
-	// público se toma de config (ORCH_PUBLIC_HOST): cubre el wildcard del
-	// certificado y se usa en la regla Host(...) publicada a Traefik.
-	consulServiceName = "orchestrator"
-
-	// Checks del laboratorio: 3 s detectan una réplica muerta bastante antes
-	// que los 10 s clásicos; el timeout de 1 s evita colgar el check.
-	consulCheckInterval   = 3 * time.Second
-	consulCheckTimeout    = time.Second
-	consulDeregisterAfter = time.Minute
-	// deregisterTimeout acota el desregistro durante el cierre graceful.
-	deregisterTimeout = 2 * time.Second
 )
 
 func main() {
@@ -123,7 +107,10 @@ func run(logger *slog.Logger) error {
 			cancelReg()
 			<-regDone
 
-			dctx, cancel := context.WithTimeout(context.Background(), deregisterTimeout)
+			// ORCH_DEREGISTER_TIMEOUT acota el desregistro y debe ser <=
+			// ORCH_SHUTDOWN_TIMEOUT: config.Load lo valida para que el cierre
+			// graceful no exceda su presupuesto total.
+			dctx, cancel := context.WithTimeout(context.Background(), cfg.DeregisterTimeout)
 			defer cancel()
 			if err := registrar.Deregister(dctx, svc.ID); err != nil {
 				logger.Warn("no se pudo desregistrar de Consul", "service_id", svc.ID, "error", err)
@@ -141,64 +128,6 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("cierre graceful completo")
 	return nil
-}
-
-// buildRegistration arma la instancia que se publica en Consul: identidad
-// única por réplica, IP anunciada, tags de Traefik y check de liveness.
-func buildRegistration(cfg config.Config, ln net.Listener) (discovery.Service, error) {
-	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		return discovery.Service{}, fmt.Errorf("el listener no expone un puerto TCP: %T", ln.Addr())
-	}
-
-	advertise, err := discovery.ResolveAdvertiseAddr(cfg.AdvertiseAddr)
-	if err != nil {
-		return discovery.Service{}, err
-	}
-
-	hostname, _ := os.Hostname() // si falla, serviceID cae a un nombre estable
-	return discovery.Service{
-		ID:      serviceID(hostname, tcpAddr.Port),
-		Name:    consulServiceName,
-		Address: advertise,
-		Port:    tcpAddr.Port,
-		Tags:    buildTags(tcpAddr.Port, cfg.PublicHost),
-		Check: discovery.Check{
-			HTTP: fmt.Sprintf("http://%s%s",
-				net.JoinHostPort(advertise, strconv.Itoa(tcpAddr.Port)), handler.HealthPath),
-			Interval:                       consulCheckInterval,
-			Timeout:                        consulCheckTimeout,
-			DeregisterCriticalServiceAfter: consulDeregisterAfter,
-		},
-	}, nil
-}
-
-// serviceID combina el nombre del servicio con el hostname del contenedor y el
-// puerto: dos réplicas nunca comparten ID aunque corran en la misma red.
-func serviceID(hostname string, port int) string {
-	if hostname == "" {
-		hostname = "local"
-	}
-	return fmt.Sprintf("%s-%s-%d", consulServiceName, hostname, port)
-}
-
-// buildTags traduce a tags de Consul el ruteo que antes vivía en labels Docker.
-// Sin traefik.enable=true, Traefik ignora el servicio (exposedByDefault=false).
-func buildTags(port int, publicHost string) []string {
-	portTag := strconv.Itoa(port)
-	return []string{
-		"traefik.enable=true",
-		"traefik.http.routers.orchestrator.entrypoints=https",
-		"traefik.http.routers.orchestrator.rule=Host(`" + publicHost + "`) && Path(`" + handler.ProcessPath + "`)",
-		"traefik.http.routers.orchestrator.tls=true",
-		"traefik.http.routers.orchestrator.middlewares=orchestrator-retry",
-		"traefik.http.services.orchestrator.loadbalancer.server.port=" + portTag,
-		"traefik.http.services.orchestrator.loadbalancer.healthcheck.path=" + handler.HealthPath,
-		"traefik.http.services.orchestrator.loadbalancer.healthcheck.interval=10s",
-		"traefik.http.services.orchestrator.loadbalancer.healthcheck.timeout=3s",
-		"traefik.http.middlewares.orchestrator-retry.retry.attempts=2",
-		"traefik.http.middlewares.orchestrator-retry.retry.initialinterval=500ms",
-	}
 }
 
 // newResolver elige la implementación de descubrimiento según DISCOVERY. El

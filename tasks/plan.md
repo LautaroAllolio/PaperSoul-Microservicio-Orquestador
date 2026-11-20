@@ -83,7 +83,7 @@ la suite verde.
 - [x] **Task 3**: `Retry-After` del 503 configurable.
 - [x] **Task 4**: Timeouts del `http.Server` desde configuración.
 - [x] **Checkpoint 2**: contrato HTTP idéntico; `make ci` + `make integration` verdes.
-- [ ] **Task 5**: Extraer registro en Consul y tags de Traefik del composition root.
+- [x] **Task 5**: Extraer registro en Consul y tags de Traefik del composition root.
 - [ ] **Checkpoint 3**: tags generados con defaults idénticos a los actuales; revisión humana.
 
 ### Phase 2 — Despliegue y CI

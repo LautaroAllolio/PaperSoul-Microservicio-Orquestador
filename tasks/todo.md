@@ -161,31 +161,36 @@ y `buildTags`, leyendo host público, intervalos del check, `deregisterTimeout` 
 Traefik desde `config.Config`. `main.go` queda como composition root. Factor 3 + SRP.
 
 **Acceptance criteria:**
-- [ ] `main.go` ya no declara `publicHost`, `consulCheckInterval`, `consulCheckTimeout`,
+- [x] `main.go` ya no declara `publicHost`, `consulCheckInterval`, `consulCheckTimeout`,
       `consulDeregisterAfter`, `deregisterTimeout`, `buildRegistration`, `serviceID` ni
-      `buildTags`.
-- [ ] Con los defaults, la lista de tags de Traefik es **byte a byte idéntica** a la actual
-      (test que compara el slice completo, incluyendo el rule `Host(...) && Path(...)`).
-- [ ] El desregistro usa `cfg.DeregisterTimeout` y no puede superar el presupuesto de
-      `ORCH_SHUTDOWN_TIMEOUT` (documentar el tope en un comentario).
+      `buildTags` (solo llama a `buildRegistration(cfg, ln)`).
+- [x] Con los defaults, la lista de tags de Traefik es **byte a byte idéntica** a la actual:
+      `reflect.DeepEqual` compara el slice completo y en orden, incluido el rule
+      `Host(...) && Path(...)`. Hay además un test con valores custom.
+- [x] El desregistro usa `cfg.DeregisterTimeout`; `config.Load` rechaza que supere
+      `ORCH_SHUTDOWN_TIMEOUT` y el comentario en `main.go` documenta el tope.
 
 **Verification:**
-- [ ] Tests pass: `go test ./cmd/orchestrator/... && make integration && make ci`
-- [ ] Build succeeds: `make build`
-- [ ] Manual check: diff de los logs de arranque — mismos `service_id`, `address` y `port`.
+- [x] Tests pass: `go test ./cmd/orchestrator/...`, `make vet`, `make test`, `make race`,
+      `make integration` (verdes).
+- [x] Build succeeds: `make build` y `docker build -t papersoul-orchestrator:local .`.
+- [x] Manual check: `grep` confirma que no quedan tags ni constantes de Consul en `main.go`;
+      los valores de `service_id`, `address` y `port` salen de los mismos campos de antes.
 
 **Dependencies:** Tasks 2 y 4
 
-**Files likely touched:** `cmd/orchestrator/registration.go` (nuevo),
-`cmd/orchestrator/main.go`, `cmd/orchestrator/main_test.go`
+**Files touched:** `cmd/orchestrator/registration.go` (nuevo), `cmd/orchestrator/main.go`,
+`cmd/orchestrator/main_test.go`, `cmd/orchestrator/registration_test.go` (nuevo),
+`internal/platform/config/config.go`, `internal/platform/config/config_test.go` (estos dos,
+por la validación cruzada de timeouts)
 
-**Estimated scope:** Medium (3 archivos)
+**Estimated scope:** Medium (6 archivos: 2 nuevos + 4 modificados)
 
 ### Checkpoint 3: Registro y descubrimiento
-- [ ] Test de tags idénticos con defaults pasando
-- [ ] `main.go` reducido a wiring + señales (sin lógica de Consul/Traefik)
+- [x] Test de tags idénticos con defaults pasando
+- [x] `main.go` reducido a wiring + señales (sin lógica de Consul/Traefik)
 - [ ] **Revisión humana** del diff de registro antes de seguir (alta probabilidad de romper
-      el descubrimiento)
+      el descubrimiento) — queda pendiente a propósito; no se inicia la Task 6 sin ella.
 
 ---
 

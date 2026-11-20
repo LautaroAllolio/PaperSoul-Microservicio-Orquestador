@@ -157,7 +157,7 @@ func TestLoadParsesAllVariables(t *testing.T) {
 		"ORCH_CONSUL_CHECK_INTERVAL":   "9s",
 		"ORCH_CONSUL_CHECK_TIMEOUT":    "2s",
 		"ORCH_CONSUL_DEREGISTER_AFTER": "5m",
-		"ORCH_DEREGISTER_TIMEOUT":      "8s",
+		"ORCH_DEREGISTER_TIMEOUT":      "5s",
 		"ORCH_READ_HEADER_TIMEOUT":     "11s",
 		"ORCH_IDLE_TIMEOUT":            "120s",
 		"ORCH_RETRY_AFTER":             "7",
@@ -188,7 +188,7 @@ func TestLoadParsesAllVariables(t *testing.T) {
 		ConsulCheckInterval:   9 * time.Second,
 		ConsulCheckTimeout:    2 * time.Second,
 		ConsulDeregisterAfter: 5 * time.Minute,
-		DeregisterTimeout:     8 * time.Second,
+		DeregisterTimeout:     5 * time.Second,
 		ReadHeaderTimeout:     11 * time.Second,
 		IdleTimeout:           120 * time.Second,
 		RetryAfter:            7,
@@ -366,6 +366,25 @@ func TestFailsOnNonPositiveIntegers(t *testing.T) {
 				t.Fatalf("error (%v) no menciona %s", err, key)
 			}
 		})
+	}
+}
+
+func TestFailsOnDeregisterTimeoutMayorAlShutdown(t *testing.T) {
+	setEnv(t, map[string]string{
+		"ORCH_DEREGISTER_TIMEOUT": "20s",
+		"ORCH_SHUTDOWN_TIMEOUT":   "10s",
+		"EXTRACTOR_URL":           extractorURL,
+		"PERSISTENCE_URL":         persistenceURL,
+	})
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatalf("ORCH_DEREGISTER_TIMEOUT > ORCH_SHUTDOWN_TIMEOUT debe fallar")
+	}
+	for _, want := range []string{"ORCH_DEREGISTER_TIMEOUT", "ORCH_SHUTDOWN_TIMEOUT"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error (%v) no menciona %s", err, want)
+		}
 	}
 }
 
