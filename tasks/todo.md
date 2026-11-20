@@ -270,17 +270,20 @@ matriz de cumplimiento y dejar el contrato HTTP textualmente igual. Factor 12 y 
 (documentación vs. código).
 
 **Acceptance criteria:**
-- [ ] La tabla de configuración incluye las 14 variables nuevas con su default y su efecto.
-- [ ] La matriz 12-Factor y "Brechas y pendientes" reflejan el estado posterior al refactor;
-      no queda ninguna afirmación de `read-only` sin sustento en el Compose.
-- [ ] Las secciones *Contrato* y *Integración con Traefik* conservan los mismos paths,
-      statuses, headers y comportamiento de liveness.
+- [x] La tabla de configuración incluye las 14 variables nuevas con su default y su efecto; el `Retry-After: 1` fijo se reemplaza por `ORCH_RETRY_AFTER` (default `1`).
+- [x] La matriz 12-Factor y "Brechas y pendientes" reflejan el estado posterior al refactor:
+      el Factor 6 cita `read_only: true` del Compose, el Factor 5 cita el job `image` de CI y
+      la brecha de CI queda cerrada. Se corrigieron referencias de línea viejas y el aviso
+      sobre las URLs downstream.
+- [x] Las secciones *Contrato* y *Integración con Traefik* conservan los mismos paths,
+      statuses, headers y comportamiento de liveness (no se tocaron).
 
 **Verification:**
-- [ ] Tests pass: `make ci && make integration`
-- [ ] Manual check: `git diff README.md` revisado línea por línea
-- [ ] Manual check: `grep -nE '/ready|/metrics' README.md` solo encuentra la referencia al
-      check de Persistencia, no al Orquestador.
+- [x] Tests pass: `make check-fmt`, `make vet`, `make test`, `make race`, `make lint-openapi`,
+      `make build` y `make integration` (por pasos, para no exceder el timeout del harness).
+- [x] Manual check: `git diff README.md` revisado línea por línea.
+- [x] Manual check: `grep -nE '/ready|/metrics' README.md` solo encuentra `/ready` en el check
+      de Persistencia (línea 378), nunca en el Orquestador; no hay `/metrics`.
 
 **Dependencies:** Tasks 1-7
 
@@ -289,10 +292,15 @@ matriz de cumplimiento y dejar el contrato HTTP textualmente igual. Factor 12 y 
 **Estimated scope:** Medium (1 archivo extenso)
 
 ### Checkpoint 5: Entrega
-- [ ] `make ci`, `make integration` y `docker build` verdes
-- [ ] Documentación y configuración coinciden con el código
-- [ ] Contrato HTTP y límites de rendimiento sin cambios (no se corren k6/Vegeta sin permiso)
-- [ ] **Revisión humana final** y aprobación para commitear
+- [x] Steps de `make ci` (`check-fmt`, `vet`, `test`, `race`, `lint-openapi`, `build`),
+      `make integration` y `docker build` verdes. `docker compose --env-file .env.example
+      config --quiet` también verde.
+- [x] Documentación y configuración coinciden con el código (tabla de 14 variables, matriz
+      12-Factor y brecha de CI actualizadas).
+- [x] Contrato HTTP y límites de rendimiento sin cambios: `api/openapi.yaml` intacto; no se
+      corren k6/Vegeta sin permiso.
+- [ ] **Revisión humana final** y aprobación para dar por entregado el plan (se detiene aquí;
+      nada fue pusheado).
 
 ---
 

@@ -399,13 +399,34 @@ equivocados.
 | `ORCH_MAX_FILE_SIZE` | `26214400` (25 MiB) | Tope del archivo. Excederlo → 413. |
 | `ORCH_MAX_BODY_BYTES` | `ORCH_MAX_FILE_SIZE` + 64 KiB | Tope duro del request completo (sobre multipart). |
 | `ORCH_VALIDATION_RELAXED` | `true` | `true` = `ValidationRelaxed` de pdfcpu (tolera xrefs reconstruidas); `false` = `ValidationStrict`. |
-| `ORCH_MAX_CONCURRENCY` | `8` | Requests en vuelo sobre `/api/v1/documents/process`. Al saturarse responde 503 + `Retry-After: 1` (no encola). `/health` no compite por slot. |
+| `ORCH_MAX_CONCURRENCY` | `8` | Requests en vuelo sobre `/api/v1/documents/process`. Al saturarse responde 503 + `Retry-After` (ver `ORCH_RETRY_AFTER`, default `1`; no encola). `/health` no compite por slot. |
 | `DISCOVERY` | — | `consul` (descubrimiento por Consul para el Orquestador y Traefik) o `static` (sin Consul; usa `EXTRACTOR_URL` y `PERSISTENCE_URL`). |
-| `EXTRACTOR_URL` | — | **Requerida.** Base URL del microservicio de Extracción. |
+| `EXTRACTOR_URL` | — | **Requerida** con `DISCOVERY=static`. Base URL del microservicio de Extracción. |
 | `EXTRACTOR_TIMEOUT` | `30s` | Deadline de la llamada al Extractor. Vencido → 504. |
-| `PERSISTENCE_URL` | — | **Requerida.** Base URL del microservicio de Persistencia. |
+| `PERSISTENCE_URL` | — | **Requerida** con `DISCOVERY=static`. Base URL del microservicio de Persistencia. |
 | `PERSISTENCE_TIMEOUT` | `15s` | Deadline de la llamada a Persistencia. Vencido → 504. |
 | `ORCH_SHUTDOWN_TIMEOUT` | `10s` | Margen del cierre graceful tras SIGINT/SIGTERM. |
+| `ORCH_RETRY_AFTER` | `1` | **Borde HTTP.** Segundos del header `Retry-After` en el 503 por saturación. Es un entero, no una `time.Duration`; se convierte una sola vez al armar el middleware. |
+| `ORCH_READ_HEADER_TIMEOUT` | `5s` | **Borde HTTP.** Tiempo máximo para leer los headers; acota un slowloris sin limitar el body del PDF. |
+| `ORCH_IDLE_TIMEOUT` | `60s` | **Borde HTTP.** Tiempo máximo de una conexión keep-alive inactiva. `WriteTimeout` sigue en `0` a propósito para no cortar requests largos de extracción. |
+| `ORCH_DEREGISTER_TIMEOUT` | `2s` | **Ciclo de vida.** Tope para desregistrar la réplica de Consul al cerrar. No puede superar `ORCH_SHUTDOWN_TIMEOUT`: si lo hace, el arranque falla con error explícito. |
+| `ORCH_CONSUL_CHECK_INTERVAL` | `3s` | **Consul.** Intervalo del check HTTP `GET /health` del servicio registrado. |
+| `ORCH_CONSUL_CHECK_TIMEOUT` | `1s` | **Consul.** Timeout del check HTTP. |
+| `ORCH_CONSUL_DEREGISTER_AFTER` | `1m` | **Consul.** Tiempo tras el cual una réplica con el check crítico se da de baja automáticamente. |
+| `ORCH_PUBLIC_HOST` | `orquestador.universidad.localhost` | **Traefik.** Host de la regla `Host(...) && Path(...)`; debe coincidir con el wildcard del certificado. |
+| `ORCH_TRAEFIK_ENTRYPOINT` | `https` | **Traefik.** Entrypoint del router publicado por tags. |
+| `ORCH_TRAEFIK_ROUTER` | `orchestrator` | **Traefik.** Nombre del router y del servicio; el middleware de retry se publica como `<router>-retry`. |
+| `ORCH_TRAEFIK_RETRY_ATTEMPTS` | `2` | **Traefik.** Reintentos del middleware de retry. |
+| `ORCH_TRAEFIK_RETRY_INTERVAL` | `500ms` | **Traefik.** Intervalo inicial entre reintentos. |
+| `ORCH_TRAEFIK_HEALTH_INTERVAL` | `10s` | **Traefik.** Intervalo del healthcheck del loadbalancer. |
+| `ORCH_TRAEFIK_HEALTH_TIMEOUT` | `3s` | **Traefik.** Timeout del healthcheck del loadbalancer. |
+
+Las 14 variables nuevas tienen exactamente el mismo default que tenían como literales en el
+código, así que cambiar el entorno no altera el comportamiento por defecto. Los valores de
+Traefik y Consul se publican como **tags del registro de Consul** (`cmd/orchestrator/registration.go`),
+no como labels Docker; el Compose los pasa con estos mismos defaults (`docker-compose.yml`).
+Todas se validan al arrancar: duraciones y enteros positivos, y
+`ORCH_DEREGISTER_TIMEOUT <= ORCH_SHUTDOWN_TIMEOUT`.
 
 Memoria: el pico por request es `ORCH_MAX_FILE_SIZE` más el contexto de pdfcpu, y
 `ORCH_MAX_CONCURRENCY` acota el total. Subir el tamaño sin bajar la concurrencia sube el
@@ -549,6 +570,12 @@ grype papersoul-orchestrator:local --fail-on high
 
 `grype db update` actualiza la base de vulnerabilidades antes de escanear.
 
+En CI este escaneo ya corre automáticamente: el job `image` de `.github/workflows/ci.yml`
+construye la imagen con `VERSION`/`REVISION`, la carga **solo en local** (`push: false`) y la
+escanea con `anchore/scan-action@v7` (`fail-build: true`, `severity-cutoff: high`, que invoca
+Grype). No hay login a registry ni publicación en el pipeline de CI: publicar sigue siendo
+exclusivo de `.github/workflows/release.yml`, disparado solo por tags `v*.*.*`.
+
 ## Operación
 
 - **Logs**: JSON a stdout (una línea por request: método, path, status, bytes, duración,
@@ -667,24 +694,24 @@ final, sin ocultar lo que no está resuelto.
 |---|---|---|---|
 | 1 | Codebase (una base de código) | Una base por microservicio. Todos los cambios de despliegue son del repo Orquestador; el Compose referencia imágenes y no modifica repos ajenos (el override local solo agrega downstream ya construidos). | Repo git; `docker-compose.yml` (sin `build:`); `docker-compose.dev.yml` (referencia imágenes de `../PaperSoul-*`). |
 | 2 | Dependencias (declaradas y aisladas) | Declaradas en `go.mod`/`go.sum`; se descargan solo en la etapa builder como capa cacheada; el runtime distroless lleva únicamente el binario, sin gestor de paquetes ni herramientas. CI resuelve Go desde `go.mod`. | `go.mod`; `Dockerfile:10-12` (`go mod download`), `Dockerfile:26` (distroless); `.github/workflows/ci.yml` (`go-version-file: go.mod`). |
-| 3 | Config (en el entorno) | Toda la configuración operativa por variables de entorno (`internal/platform/config/config.go`). Fallo rápido si falta/inválida (`errors.Join`). `.env` no se versiona; la imagen solo fija `ORCH_ADDR`; no hay secretos embebidos. Compose exige las URLs con `${VAR:?}`. | `internal/platform/config/config.go`; `Dockerfile:32`; `.gitignore:151` (`.env`); `.env.example`; `docker-compose.yml:20,22`. |
-| 4 | Backing services (recursos adheridos) | Extracción y Persistencia se tratan como servicios conectables por URL (`EXTRACTOR_URL`/`PERSISTENCE_URL`), sin distinguir local de remoto. La red `mired` es externa y Traefik se despliega aparte. Mongo queda dentro del repo de Persistencia (ajeno, no verificado aquí). Con `DISCOVERY=consul` el descubrimiento pasa por Consul; con `static` se usan `EXTRACTOR_URL`/`PERSISTENCE_URL`. | `cmd/orchestrator/main.go:51-53` (clientes con `BaseURL` de cfg); `docker-compose.yml:64-69` (red `external: true`). |
-| 5 | Build, release, run | Build reproducible por `Dockerfile` multi-stage; release = imagen referenciada por `ORCH_IMAGE` en Compose (separada del `run`); run = contenedor con configuración por entorno. | `Dockerfile`; `docker-compose.yml:13` (`image: ${ORCH_IMAGE:-...}`). *Brecha: ver abajo.* |
-| 6 | Processes (sin estado) | Proceso sin estado: cada request es dueño de su buffer y no hay estado compartido durable. **Cero almacenamiento intermedio** es un criterio arquitectónico garantizado por escaneo estático (go/ast sobre rutas de producción: sin `os.Create`/`CreateTemp`/`WriteFile`/`OpenFile`/`Remove*` ni SDKs de S3/MinIO). Corre con filesystem `--read-only`. | `internal/service/orchestrator.go:33-39` (doc "No tiene estado"); `internal/handler/process.go:48` (multipart en streaming, no vuelca a disco); `TestE2ENuncaEscribeADisco` en `internal/handler/integration_test.go:512`. |
-| 7 | Port binding | Escucha en `ORCH_ADDR` (default `:8080`) con `net.Listen("tcp", ...)`; `EXPOSE 8080`; el puerto no se publica al host por defecto (lo expone Traefik). | `cmd/orchestrator/main.go:60`; `Dockerfile:34`; `docker-compose.yml` (sin `ports:`). |
-| 8 | Concurrency (escalado por procesos) | Escala por réplicas independientes que comparten servicio en Traefik. Por proceso, `ORCH_MAX_CONCURRENCY` (default 8) limita requests en vuelo con un semáforo: al saturarse responde `503` + `Retry-After: 1`, sin encolar; `/health` queda exento. | `internal/handler/middleware.go:139-161`; `docker-compose.yml:27-28` (`deploy.replicas`). |
-| 9 | Disposability | Arranque rápido (binario estático, no descarga nada en runtime). SIGTERM/SIGINT → deja de aceptar y `srv.Shutdown` espera hasta `ORCH_SHUTDOWN_TIMEOUT`; el `stop_grace_period` del contenedor supera ese timeout. Sin estado, una caída no requiere recuperación. | `cmd/orchestrator/main.go:99-122`; `docker-compose.yml:26` (`stop_grace_period`); verificación de la Tarea 2 (`docker stop -t 15` con `ORCH_SHUTDOWN_TIMEOUT=10s`). |
-| 10 | Dev/prod parity | Misma imagen y configuración en local y en el deploy; el override local referencia las **mismas imágenes** (sin `build:`). La única divergencia documentada es que el override agrega los downstream locales; Traefik, MongoDB y Consul los provee el entorno en ambos casos. | `docker-compose.yml` + `docker-compose.dev.yml` (layering de Compose). |
-| 11 | Logs (flujo de eventos a stdout) | JSON a stdout (`slog.NewJSONHandler(os.Stdout)`): una línea por request con método, path, status, bytes, `duration_ms` y `correlation_id`; los panic loguean el stack al log, nunca al cliente; nada se escribe a archivos. | `cmd/orchestrator/main.go:36`; `internal/handler/middleware.go:81-99` (RequestLogger), `:106-131` (Recoverer); verificación de la Tarea 2 (logs JSON a stdout). |
+| 3 | Config (en el entorno) | Toda la configuración operativa por variables de entorno (`internal/platform/config/config.go`), incluidos host público, timeouts del borde, intervalos de Consul/Traefik y `Retry-After`. Fallo rápido si falta o es inválida (`errors.Join`) y validación cruzada de timeouts. `.env` no se versiona; la imagen solo fija `ORCH_ADDR`; no hay secretos embebidos. Compose exige `ORCH_IMAGE` con `${VAR:?}` y pasa los mismos defaults del binario. | `internal/platform/config/config.go`; `cmd/orchestrator/registration.go`; `Dockerfile:44`; `.gitignore:5` (`.env`); `.env.example`; `docker-compose.yml`. |
+| 4 | Backing services (recursos adheridos) | Extracción y Persistencia se tratan como servicios conectables por URL (`EXTRACTOR_URL`/`PERSISTENCE_URL`), sin distinguir local de remoto. La red `mired` es externa y Traefik se despliega aparte. Mongo queda dentro del repo de Persistencia (ajeno, no verificado aquí). Con `DISCOVERY=consul` el descubrimiento pasa por Consul; con `static` se usan `EXTRACTOR_URL`/`PERSISTENCE_URL`. | `cmd/orchestrator/main.go:43-49,133-141` (resolver y clientes con `BaseURL` de cfg); `docker-compose.yml:71-73` (red `external: true`). |
+| 5 | Build, release, run | Build reproducible por `Dockerfile` multi-stage; release = imagen versionada referenciada por `ORCH_IMAGE` en Compose (separada del `run`); run = contenedor con configuración por entorno. CI construye y escanea **sin publicar**; la publicación en GHCR queda exclusiva de `release.yml`, disparada por tags `v*.*.*`. | `Dockerfile`; `docker-compose.yml:16` (`image: ${ORCH_IMAGE:?...}`); `.github/workflows/ci.yml` (job `image`, `push: false`); `.github/workflows/release.yml` (`push: true`). |
+| 6 | Processes (sin estado) | Proceso sin estado: cada request es dueño de su buffer y no hay estado compartido durable. **Cero almacenamiento intermedio** es un criterio arquitectónico garantizado por escaneo estático (go/ast sobre rutas de producción: sin `os.Create`/`CreateTemp`/`WriteFile`/`OpenFile`/`Remove*` ni SDKs de S3/MinIO). Corre con filesystem de solo lectura, declarado explícitamente en el Compose y verificado con `docker compose config`. | `internal/service/orchestrator.go:33-39` (doc "No tiene estado"); `internal/handler/process.go:48` (multipart en streaming, no vuelca a disco); `TestE2ENuncaEscribeADisco` en `internal/handler/integration_test.go:512`; `docker-compose.yml:20` (`read_only: true`). |
+| 7 | Port binding | Escucha en `ORCH_ADDR` (default `:8080`) con `net.Listen("tcp", ...)`; `EXPOSE 8080`; el puerto no se publica al host por defecto (lo expone Traefik). | `cmd/orchestrator/main.go:57`; `Dockerfile:46`; `docker-compose.yml:66` (sin `ports:` ni `container_name`). |
+| 8 | Concurrency (escalado por procesos) | Escala por réplicas independientes que comparten servicio en Traefik. Por proceso, `ORCH_MAX_CONCURRENCY` (default 8) limita requests en vuelo con un semáforo: al saturarse responde `503` + `Retry-After` (`ORCH_RETRY_AFTER`, default `1`), sin encolar; `/health` queda exento. | `internal/handler/middleware.go:139-161`; `internal/handler/router.go` (pasa `cfg.RetryAfter`); `docker-compose.yml:59` (`deploy.replicas`). |
+| 9 | Disposability | Arranque rápido (binario estático, no descarga nada en runtime). SIGTERM/SIGINT → deja de aceptar, desregistra de Consul con `ORCH_DEREGISTER_TIMEOUT` y `srv.Shutdown` espera hasta `ORCH_SHUTDOWN_TIMEOUT`; el `stop_grace_period` del contenedor supera ese timeout. Sin estado, una caída no requiere recuperación. | `cmd/orchestrator/main.go:104-129`; `internal/platform/config/config.go` (tope cruzado de timeouts); `docker-compose.yml:57` (`stop_grace_period`); verificación de la Tarea 2 (`docker stop -t 15` con `ORCH_SHUTDOWN_TIMEOUT=10s`). |
+| 10 | Dev/prod parity | Misma imagen y configuración en local y en el deploy; el override local referencia las **mismas imágenes** (sin `build:`). El Compose pasa los mismos defaults del binario, documentados en `.env.example`. La única divergencia es que el override agrega los downstream locales; Traefik, MongoDB y Consul los provee el entorno en ambos casos. | `docker-compose.yml` + `docker-compose.dev.yml` (layering de Compose); `.env.example`. |
+| 11 | Logs (flujo de eventos a stdout) | JSON a stdout (`slog.NewJSONHandler(os.Stdout)`): una línea por request con método, path, status, bytes, `duration_ms` y `correlation_id`; los panic loguean el stack al log, nunca al cliente; nada se escribe a archivos. | `cmd/orchestrator/main.go:28`; `internal/handler/middleware.go:77` (RequestLogger), `:102` (Recoverer); verificación de la Tarea 2 (logs JSON a stdout). |
 | 12 | Admin processes | No hay tareas administrativas (migraciones, mantenimiento, cron) hoy; se documenta su ausencia. Cualquier tarea admin futura debe ejecutarse con el mismo artefacto y configuración. | No existe comando/módulo admin en `cmd/`; ausencia documentada en el plan de despliegue. |
 
 ### Brechas y pendientes
 
-- **CI no construye ni publica la imagen**: `.github/workflows/ci.yml` corre solo el toolchain
-  Go (formato, vet, tests, race, integración y contrato OpenAPI); el `docker build`, el
-  versionado de la imagen (tag/registry) y el escaneo con Grype quedan fuera del pipeline.
-  Recomendación: separar un job de build + push por tag semántico y sumar
-  `grype ... --fail-on high`.
+- **CI construye y escanea, pero no publica (brecha cerrada)**: antes
+  `.github/workflows/ci.yml` corría solo el toolchain Go. Ahora suma el job `image`, que
+  construye con `VERSION`/`REVISION`, escanea con Grype (`fail-build: true`,
+  `severity-cutoff: high`) y carga la imagen solo en local (`push: false`). La publicación
+  con tag semántico ya estaba en `release.yml`, único workflow con `packages: write`.
 - **Validación final contra el Traefik real**: el balanceo/healthcheck se verificó con un Traefik
   desechable; falta confirmarlo contra la instancia del profesor (`orquestador.universidad.localhost`).
 - **Fronteras ajenas no verificadas aquí**: el contrato con Extractor y Persistencia se verificó

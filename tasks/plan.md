@@ -94,8 +94,9 @@ la suite verde.
 
 ### Phase 3 — Cierre
 
-- [ ] **Task 8**: Actualizar README, tabla de variables y matriz 12-Factor.
-- [ ] **Checkpoint 5**: suite completa, documentación consistente, aprobación para commitear.
+- [x] **Task 8**: Actualizar README, tabla de variables y matriz 12-Factor.
+- [ ] **Checkpoint 5**: suite completa y documentación consistente ya verificados; queda la
+      **revisión humana final** antes de dar por entregado el plan (nada pusheado).
 
 Los criterios de aceptación, verificación, dependencias y archivos de cada tarea están en
 `tasks/todo.md`.
