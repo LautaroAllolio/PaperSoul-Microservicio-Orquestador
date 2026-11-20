@@ -1,257 +1,288 @@
-# Task List — PaperSoul Orquestador y Validador de PDFs
+# Task List — Refactorización 12-Factor del Orquestador
 
 Sigue la estructura del plan en `tasks/plan.md`. Orden por dependencias (bottom-up),
-slices verticales. Cada tarea deja el repo en estado compilable.
+slices verticales: cada tarea deja el repo compilable y con la suite verde.
 
-Comandos base: `make build` · `make test` · `make race` · `make vet` · `make integration`
-· `make lint-openapi` · `make check-fmt` · `make ci` (todo lo anterior en orden).
+**Archivo previo:** el plan de construcción original está en `tasks/plan-build.md` y
+`tasks/todo-build.md` (archivados con `git mv`, sin sobrescribir). Sus ítems sin marcar no se
+dan por cerrados.
 
-**Estado (Tasks 1-8 cerradas).** Las marcas `[x]` son las verificadas por la suite o
-ejecutadas a mano. Quedan `[ ]` a propósito los ítems que necesitan a una persona: las
-revisiones humanas de los checkpoints A, B y C, la aprobación del contrato OpenAPI, la
-ráfaga de 30 requests simultáneos, y los dos puntos que solo existen en CI (el pipeline
-está escrito pero el repo todavía no se pusheó, así que nunca corrió).
+**Comandos base:** `make build` · `make test` · `make race` · `make vet` · `make integration`
+· `make lint-openapi` · `make check-fmt` · `make ci`.
+
+**Decisiones del usuario (2026-11-20):** verificación **solo estática** (no levantar ni
+modificar los stacks en `~/docker`: Traefik, Consul, MongoDB) y **un commit por tarea**
+(8 commits atómicos).
+
+**Regla de no regresión:** ninguna tarea cambia el contrato HTTP, el motor de validación en
+memoria, el dedup por checksum, el semáforo, el singleflight ni el reintento solo por dial.
 
 ---
 
-## Phase 0: Bootstrap
+## Phase 0: Fundamentos
 
-### Task 1: Esqueleto del módulo Go y estructura 3 capas
+### Task 1: Alinear toolchain Go y reducir `.gitignore`
 
-**Description:** Inicializa `go.mod` (módulo `github.com/papersoul/orchestrator`, Go ≥ 1.24),
-dependencias (`chi/v5`, `pdfcpu` última estable), el árbol de directorios `cmd/internal/...`
-y el `Makefile` con targets build/test/race/vet/integration.
-
-**Acceptance criteria:**
-- [x] `go build ./...` compila sin código de negocio (main.go mínimo + paquetes vacíos)
-- [x] Árbol de directorios exacto del plan (handler/service/client/domain/platform)
-- [x] `Makefile` con `build/test/race/vet/integration` funcionales
-
-**Verification:**
-- [x] Tests pass: `make test && make vet`
-- [x] Build succeeds: `make build`
-- [x] Manual check: `tree internal -L 2` muestra las capas
-
-**Dependencies:** None
-
-**Files likely touched:** `go.mod`, `go.sum`, `Makefile`, `cmd/orchestrator/main.go` (stub),
-`internal/{handler,service,client,domain,platform}/*.go` (generadores de paquete)
-
-**Estimated scope:** Small (3-5 files)
-
-### Task 2: Config por env + modelado RFC 9457
-
-**Description:** `platform/config` carga la configuración desde env (tabla 2.7 del plan) con
-defaults; `platform/problem` implementa `Problem`/`InvalidParam`/`Write` (sección 2.1) y
-`platform/errors` define los sentinels del dominio + `mapper.Map` (matriz 2.6).
+**Description:** Bajar la imagen builder de `golang:1.27-bookworm` a `golang:1.26-bookworm`
+para igualar la directiva `go 1.26.0` de `go.mod`, y reemplazar la plantilla Python de 229
+líneas de `.gitignore` por una lista mínima Go que conserve todos los ignorados vigentes.
+Factores 1, 2 y 10.
 
 **Acceptance criteria:**
-- [x] `config.Load()` lee las 10 variables con defaults seguros y falla claro ante URL vacía de downstream
-- [x] `Problem` serializa RFC 9457 exacto (campos obligatorios `type/title/status`, `omitempty` en resto)
-- [x] Cada sentinel del dominio tiene entrada en `mapper.Map` y todo error no mapeado → `ErrInternal`(500)
-- [x] `errors.Is` funciona para los sentinels documentados
+- [ ] `Dockerfile` usa `golang:1.26-bookworm`; multi-stage, distroless non-root, `ARG`s,
+      `ENV ORCH_ADDR` y `ENTRYPOINT` quedan intactos.
+- [ ] `.gitignore` conserva `.env`, `.envrc`, `/bin/`, `/orchestrator`,
+      `tests/vegeta-generated/`, `/consul/consul.json` y `/consul/data/`; desaparecen las
+      reglas de Python/UV/Poetry/Celery/Spyder.
+- [ ] `git status --short` no muestra archivos generados nuevos.
 
 **Verification:**
-- [x] Tests pass: `go test ./internal/platform/...`
-- [x] Build succeeds: `make build`
-- [x] Manual check: `invalid_params` aparece en el JSON solo cuando hay items
+- [ ] Tests pass: `make ci`
+- [ ] Build succeeds: `docker build -t papersoul-orchestrator:local .`
+- [ ] Manual check: `git check-ignore -v .env bin/orchestrator tests/vegeta-generated/report.json`
+
+**Dependencies:** None (paralelizable con Task 2)
+
+**Files likely touched:** `Dockerfile`, `.gitignore`
+
+**Estimated scope:** Small (2 archivos)
+
+### Task 2: Extender `config.Config` con los parámetros hoy hardcodeados
+
+**Description:** Añadir a `config.Load()` los valores literales que hoy dependen del entorno:
+`ORCH_PUBLIC_HOST`, `ORCH_TRAEFIK_ENTRYPOINT`, `ORCH_TRAEFIK_ROUTER`,
+`ORCH_TRAEFIK_RETRY_ATTEMPTS`, `ORCH_TRAEFIK_RETRY_INTERVAL`,
+`ORCH_TRAEFIK_HEALTH_INTERVAL`, `ORCH_TRAEFIK_HEALTH_TIMEOUT`,
+`ORCH_CONSUL_CHECK_INTERVAL`, `ORCH_CONSUL_CHECK_TIMEOUT`,
+`ORCH_CONSUL_DEREGISTER_AFTER`, `ORCH_DEREGISTER_TIMEOUT`,
+`ORCH_READ_HEADER_TIMEOUT`, `ORCH_IDLE_TIMEOUT` y `ORCH_RETRY_AFTER`. Defaults idénticos a los
+actuales, validación positiva y `errors.Join`. Factor 3.
+
+**Acceptance criteria:**
+- [ ] Las 14 variables se leen con defaults que reproducen exactamente el comportamiento
+      actual (host `orquestador.universidad.localhost`, `https`, `orchestrator`, 2, 500ms,
+      10s, 3s, 3s, 1s, 1m, 2s, 5s, 60s, 1).
+- [ ] Un host vacío, una duración ≤ 0 o un entero ≤ 0 hacen fallar `Load()` con un mensaje
+      que nombra la variable (misma forma que `requiredError`).
+- [ ] Ningún archivo de producción conserva el literal `universidad.localhost` fuera de
+      `config.go` (Compose, `.env.example` y README quedan fuera del escaneo).
+
+**Verification:**
+- [ ] Tests pass: `go test ./internal/platform/config/... && make vet`
+- [ ] Build succeeds: `make build`
+- [ ] Manual check: `ORCH_TRAEFIK_RETRY_ATTEMPTS=0 go run ./cmd/orchestrator` sale con código 1
+      y mensaje explícito.
+
+**Dependencies:** None (paralelizable con Task 1)
+
+**Files likely touched:** `internal/platform/config/config.go`,
+`internal/platform/config/config_test.go`
+
+**Estimated scope:** Medium (2 archivos, ~14 campos)
+
+### Checkpoint 1: Fundamentos
+- [ ] `make ci` y `docker build -t papersoul-orchestrator:local .` verdes
+- [ ] `config.Load()` con defaults y con valores inválidos cubierto por tests
+- [ ] Revisión rápida del diff de `.gitignore` (nada de lo vigente se perdió)
+
+---
+
+## Phase 1: Borde HTTP y composition root
+
+### Task 3: `Retry-After` del 503 configurable
+
+**Description:** `MaxConcurrency` pasa a recibir el valor de `ORCH_RETRY_AFTER` (default `1`)
+en vez de la constante `retryAfterSeconds`, y `NewRouter` se lo pasa desde `config.Config`.
+Mantener el orden de middlewares y la exención de `/health`. Factor 3, KISS.
+
+**Acceptance criteria:**
+- [ ] El 503 por saturación emite `Retry-After` con el valor configurado; con default sigue
+      siendo `1`.
+- [ ] `/health` sigue exento del semáforo y todos los errores siguen siendo `problem+json`.
+- [ ] Hay tests para el default y para un valor custom (p. ej. `7`).
+
+**Verification:**
+- [ ] Tests pass: `go test ./internal/handler/... && make ci`
+- [ ] Build succeeds: `make build`
+- [ ] Manual check: revisar que `rutas`, `RequestID`, `RequestLogger` y `Recoverer` no cambiaron.
+
+**Dependencies:** Task 2
+
+**Files likely touched:** `internal/handler/middleware.go`,
+`internal/handler/middleware_test.go`, `internal/handler/router.go`,
+`internal/handler/router_test.go`
+
+**Estimated scope:** Medium (4 archivos)
+
+### Task 4: Timeouts del `http.Server` desde configuración
+
+**Description:** `newServer` usa `cfg.ReadHeaderTimeout` e `cfg.IdleTimeout` en lugar de las
+constantes `readHeaderTimeout`/`idleTimeout`. `WriteTimeout` permanece en 0 a propósito.
+Factor 3.
+
+**Acceptance criteria:**
+- [ ] Con defaults, `ReadHeaderTimeout = 5s` e `IdleTimeout = 60s`; `WriteTimeout = 0`.
+- [ ] El log de arranque/cierre sigue expresando duraciones en milisegundos vía `milisegundos()`.
+- [ ] Los tests existentes de `newServer` y del shutdown pasan sin cambiar su semántica.
+
+**Verification:**
+- [ ] Tests pass: `go test ./cmd/orchestrator/... && make ci`
+- [ ] Build succeeds: `make build`
+- [ ] Manual check: comparar `newServer` con los defaults de config; sin levantar servicios.
+
+**Dependencies:** Task 2 (paralelizable con Task 3)
+
+**Files likely touched:** `cmd/orchestrator/main.go`, `cmd/orchestrator/main_test.go`
+
+**Estimated scope:** Small (2 archivos)
+
+### Checkpoint 2: Borde HTTP
+- [ ] `make ci` y `make integration` verdes
+- [ ] Contrato HTTP idéntico: mismos paths, métodos, headers y matriz de status
+- [ ] Sin regresión de logs JSON a stdout
+
+### Task 5: Extraer registro en Consul y tags de Traefik del composition root
+
+**Description:** Crear `cmd/orchestrator/registration.go` con `buildRegistration`, `serviceID`
+y `buildTags`, leyendo host público, intervalos del check, `deregisterTimeout` y parámetros de
+Traefik desde `config.Config`. `main.go` queda como composition root. Factor 3 + SRP.
+
+**Acceptance criteria:**
+- [ ] `main.go` ya no declara `publicHost`, `consulCheckInterval`, `consulCheckTimeout`,
+      `consulDeregisterAfter`, `deregisterTimeout`, `buildRegistration`, `serviceID` ni
+      `buildTags`.
+- [ ] Con los defaults, la lista de tags de Traefik es **byte a byte idéntica** a la actual
+      (test que compara el slice completo, incluyendo el rule `Host(...) && Path(...)`).
+- [ ] El desregistro usa `cfg.DeregisterTimeout` y no puede superar el presupuesto de
+      `ORCH_SHUTDOWN_TIMEOUT` (documentar el tope en un comentario).
+
+**Verification:**
+- [ ] Tests pass: `go test ./cmd/orchestrator/... && make integration && make ci`
+- [ ] Build succeeds: `make build`
+- [ ] Manual check: diff de los logs de arranque — mismos `service_id`, `address` y `port`.
+
+**Dependencies:** Tasks 2 y 4
+
+**Files likely touched:** `cmd/orchestrator/registration.go` (nuevo),
+`cmd/orchestrator/main.go`, `cmd/orchestrator/main_test.go`
+
+**Estimated scope:** Medium (3 archivos)
+
+### Checkpoint 3: Registro y descubrimiento
+- [ ] Test de tags idénticos con defaults pasando
+- [ ] `main.go` reducido a wiring + señales (sin lógica de Consul/Traefik)
+- [ ] **Revisión humana** del diff de registro antes de seguir (alta probabilidad de romper
+      el descubrimiento)
+
+---
+
+## Phase 2: Despliegue y CI
+
+### Task 6: Compose con `read_only` y variables nuevas
+
+**Description:** Declarar `read_only: true` en el servicio del Orquestador (el README ya lo
+afirma) y propagar las variables nuevas con los mismos defaults del binario. Actualizar
+`.env.example` con el bloque documentado, sin secretos reales. Factores 3, 6 y 10.
+
+**Acceptance criteria:**
+- [ ] `docker-compose.yml` incluye `read_only: true` y las variables nuevas con defaults
+      idénticos a `config.go`; se conservan red `mired` externa, réplicas,
+      `stop_grace_period` y ausencia de `ports:`/`container_name`.
+- [ ] `.env.example` lista las variables nuevas comentadas, con una nota de que los defaults
+      replican al binario.
+- [ ] `docker compose config` resuelve sin error con `.env` copiado del ejemplo.
+
+**Verification:**
+- [ ] Build succeeds: `docker compose config --quiet`
+- [ ] Manual check: `docker compose config | grep -A2 read_only`
+- [ ] Manual check: `make integration` (escaneo anti-disco sigue verde con FS read-only)
+
+**Dependencies:** Tasks 2 y 5
+
+**Files likely touched:** `docker-compose.yml`, `.env.example`
+
+**Estimated scope:** Small (2 archivos)
+
+### Task 7: CI construye y escanea imagen sin publicarla
+
+**Description:** Agregar a `.github/workflows/ci.yml` un job separado que haga
+`docker build` con `VERSION`/`REVISION` y escanee con `grype ... --fail-on high`. Sin login,
+sin push. `release.yml` queda como único publicador. Factores 5 y 10.
+
+**Acceptance criteria:**
+- [ ] El job nuevo corre `docker build` con build-args y ejecuta Grype sobre la imagen local;
+      no incluye `docker/login-action` ni `push: true`.
+- [ ] `release.yml` no se modifica y sigue publicando solo con tags `v*.*.*`.
+- [ ] El job de imagen no introduce secretos nuevos y no bloquea al job `verify`.
+
+**Verification:**
+- [ ] Build succeeds: `docker build -t papersoul-orchestrator:local .`
+- [ ] Manual check: `grype papersoul-orchestrator:local --fail-on high` (si Grype está
+      instalado) o inspección del workflow en su defecto.
+- [ ] Manual check: `git diff .github/workflows/` muestra cambios solo en `ci.yml`.
 
 **Dependencies:** Task 1
 
-**Files likely touched:** `internal/platform/config/config.go`,
-`internal/platform/problem/problem.go`, `internal/platform/errors/errors.go`,
-`internal/platform/errors/mapper.go` + tests
+**Files likely touched:** `.github/workflows/ci.yml`
 
-**Estimated scope:** Medium (4-6 files)
+**Estimated scope:** Small (1 archivo)
 
----
-
-## Phase 1: Validación (fail-fast)
-
-### Task 3: Wrapper pdfcpu (estructura + cifrado) en memoria
-
-**Description:** `platform/pdf.Validator` envuelve `api.ReadAndValidate(io.ReadSeeker, conf)`
-con `ValidationRelaxed/Strict` según config; mapea errores a `ErrPDFCorrupted`/`ErrPDFEncrypted`
-y detecta cifrado vía trailer (`ctx.XRefTable.Encrypt`). Fixtures en `testdata/` (PDF válido,
-corrupto, cifrado). **Congelar aquí el mecanismo exacto de detección de cifrado.**
-
-**Acceptance criteria:**
-- [x] PDF válido → pageCount > 0, sin error, reader reposicionado al principio
-- [x] PDF corrupto → `ErrPDFCorrupted` (`errors.Is`)
-- [x] PDF cifrado → `ErrPDFEncrypted` (mecanismo congelado + test que lo fija contra la versión de go.mod)
-- [x] No se escribe a disco: solo se usa `io.ReadSeeker` en memoria (revisión de imports: sin os.CreateTemp)
-
-**Verification:**
-- [x] Tests pass: `go test ./internal/platform/pdf/...`
-- [x] Manual check: leer un PDF cifrado real (vía `api.Encrypt`) como fixture inicial
-
-**Dependencies:** Task 2
-
-**Files likely touched:** `internal/platform/pdf/validate.go`, `internal/platform/pdf/testdata/*`,
-`internal/platform/pdf/validate_test.go`, `go.mod` (pdfcpu pinned cuando se congela el mecanismo)
-
-**Estimated scope:** Medium (3-6 files)
-
-### Task 4: Handler multipart streaming + magic bytes + límites
-
-**Description:** `internal/handler/process.go` implementa la lectura **sin disco** del part
-`file` (`r.MultipartReader()`), sniff de `%PDF-` en el primer chunk (abort early), caps
-`MaxBytesReader` (413) + `LimitReader` (413), y responde `problem+json` para 400/413/422.
-Contrato `handler.DocumentService` (interfaz consumidor) definido para que el orquestador
-pueda implementarlo.
-
-**Acceptance criteria:**
-- [x] multipart válido → devuelve `*domain.ProcessInput{File: *bytes.Reader}` sin tocar disco
-- [x] falta `file` → 400 problem+json con `invalid_params=[{file,required}]`
-- [x] magic bytes ≠ `%PDF-` → 422 `invalid-pdf-header` (sin bufferizar el archivo completo)
-- [x] part > `MaxFileSize` → 413; body > `MaxBodyBytes` → 413 (tope **25 MiB confirmado**)
-- [x] el handler NO valida estructura pdfcpu (eso es del servicio); solo transporte
-
-**Verification:**
-- [x] Tests pass: `go test ./internal/handler/...`
-- [x] Manual check (todo a problem+json): curl con un `.png` → 422; sin campo → 400; `dd` > 25MiB → 413
-
-**Dependencies:** Task 2
-
-**Files likely touched:** `internal/handler/process.go`, `internal/handler/services.go`,
-`internal/handler/process_test.go`, `internal/domain/document.go`
-
-**Estimated scope:** Medium (4-6 files)
-
-### Checkpoint A: Validación end-to-end parcial
-- [x] `make test && make vet` verde
-- [x] Subir un JPG (422), un PDF de verdad (llega hasta el fake del punto siguiente) y un >25MiB (413)
-- [ ] Revisión humana de la lectura `MultipartReader` en memoria (vía code review) antes de seguir
+### Checkpoint 4: Despliegue y pipelines
+- [ ] `docker compose config --quiet` y build local de imagen verdes
+- [ ] Workflows revisados: CI no publica, release sí
+- [ ] Sin regresión en `make ci`
 
 ---
 
-## Phase 2: Downstream y orquestación
+## Phase 3: Cierre
 
-### Task 5: Clientes HTTP Extract+Persistencia
+### Task 8: Actualizar README, tabla de variables y matriz 12-Factor
 
-**Description:** `internal/client`: `extractorClient.Extract` reenvía el binario en memoria con
-multipart vía `io.Pipe` + `ContentLength` precalculado y headers `X-Document-Checksum`/
-`X-Correlation-Id`; decodifica en **`domain.ExtractResponse`** (tipado; **no** `json.RawMessage`)
-validando el esquema plano (`extraction_method` ∈ `{pymupdf, ocr}`, `page_count ≥ 1`).
-`persistenceClient.FindByChecksum` → `GET /api/v1/documents/by-checksum/{checksum}` y `Store` →
-`POST /api/v1/documents` con body **`domain.StoreDocumentRequest`**; mapeo 404→`ErrDocumentNotFound`,
-409→`ErrPersistenceConflict`, no-2xx→`ErrUnavailable`, deadline→`ErrTimeout`. Fakes `httptest` para todo.
+**Description:** Documentar las variables nuevas, corregir la afirmación de `read-only` ahora
+que el Compose la declara, cerrar la brecha de CI en "Brechas y pendientes", actualizar la
+matriz de cumplimiento y dejar el contrato HTTP textualmente igual. Factor 12 y DRY
+(documentación vs. código).
 
 **Acceptance criteria:**
-- [x] `Extract` produce petición multipart con boundary correcta y `ContentLength` exacto (>0), sin transfer-chunked
-- [x] `Extract` con body no-JSON/vacío **o esquema inválido** (`extraction_method` ∉ {pymupdf,ocr}, `page_count < 1`) → `ErrExtractorInvalidResponse`
-- [x] `FindByChecksum` 404 → `ErrDocumentNotFound`; 200 → `*StoredDocumentResponse` (ID/PDFHash/FileName/PageCount)
-- [x] `Store` envía JSON plano `StoreDocumentRequest` (con `pdf_hash`, `text_hash` y `uploaded_at`); 409 → `ErrPersistenceConflict`; 201 → `StoredDocumentResponse`
-- [x] timeout (fake que duerme) → `ErrExtractorTimeout`/`ErrPersistenceTimeout`
-- [x] `X-Correlation-Id` y `X-Document-Checksum` propagados en todos los calls
+- [ ] La tabla de configuración incluye las 14 variables nuevas con su default y su efecto.
+- [ ] La matriz 12-Factor y "Brechas y pendientes" reflejan el estado posterior al refactor;
+      no queda ninguna afirmación de `read-only` sin sustento en el Compose.
+- [ ] Las secciones *Contrato* y *Integración con Traefik* conservan los mismos paths,
+      statuses, headers y comportamiento de liveness.
 
 **Verification:**
-- [x] Tests pass: `go test ./internal/client/...`
-- [x] Manual check: el fake registra `R.ContentLength` y `FormDataContentType()`
+- [ ] Tests pass: `make ci && make integration`
+- [ ] Manual check: `git diff README.md` revisado línea por línea
+- [ ] Manual check: `grep -nE '/ready|/metrics' README.md` solo encuentra la referencia al
+      check de Persistencia, no al Orquestador.
 
-**Dependencies:** Task 3
+**Dependencies:** Tasks 1-7
 
-**Files likely touched:** `internal/client/extractor.go`, `internal/client/persistence.go`,
-`internal/client/multipart.go`, `internal/client/transport.go` + tests, `internal/domain/document.go`
+**Files likely touched:** `README.md`
 
-**Estimated scope:** Medium (5-7 files)
+**Estimated scope:** Medium (1 archivo extenso)
 
-### Task 6: Orquestador (dedup → validate → extract → store)
-
-**Description:** `service.orchestrator.Process` implementa el flujo de la sección 2.4:
-checksum SHA-256 → `FindByChecksum` (hit=REUSED sin extraer) → `validator.Validate` (422) →
-`extractor.Extract` → **cálculo de `text_hash` = SHA-256(`ExtractedText`) y `UploadedAt` =
-`time.Now().UTC()`** → ensamblado de **`domain.StoreDocumentRequest`** → `persistence.Store` →
-PROCESSED; ante 409 relee y responde REUSED. Con mocks (manuales) de las tres interfaces.
-
-**Acceptance criteria:**
-- [x] dedup hit → status `REUSED` y el mock del extractor NO se invoca
-- [x] flujo nuevo → status `PROCESSED` con `documentId/checksum/pageCount` correctos y el mock de `Store` recibe `StoreDocumentRequest` con `PDFHash == checksum`, `TextHash == sha256(extracted_text)`, `UploadedAt ≈ now UTC`
-- [x] `ExtractResponse` devuelto inválido (method desconocido / page_count < 1) → errores mapeables 502 y NO se llama a `Store`
-- [x] `Validate` falla → 422 y no se llama a downstream
-- [x] `Store` devuelve 409 → se relee por checksum y se responde `REUSED`
-- [x] errores de extractor/persistence se propagan como sentinels 502/504 al mapper
-- [x] reader siempre re-sekeado a 0 antes de cada uso (sin lecturas desfasadas)
-
-**Verification:**
-- [x] Tests pass: `go test ./internal/service/...`
-- [x] Manual check: table-driven test donde el dedup hit NO invoca el mock extractor (contador de llamadas = 0)
-
-**Dependencies:** Tasks 4, 5
-
-**Files likely touched:** `internal/service/orchestrator.go`, `internal/service/orchestrator_test.go`
-
-**Estimated scope:** Medium (2-4 files)
-
-### Checkpoint B: Orquestación lógica
-- [x] `make test` verde con mocks
-- [ ] Revisión humana del flujo de dedup/race (leer orchestrator.go completo)
-
----
-
-## Phase 3: Wiring y E2E
-
-### Task 7: Router (chi) + middleware + main + graceful shutdown
-
-**Description:** `handler/router.go` monta `POST /api/v1/documents/process` y middleware
-(request-id a partir de `X-Correlation-Id`, recoverer→500 problem+json, logger slog,
-semáforo de concurrencia); `cmd/orchestrator/main.go` cablea config→clients→pdf→orchestrator→handler,
-arranca con `signal.NotifyContext` y shutdown graceful.
-
-**Acceptance criteria:**
-- [x] el servidor acepta requests y responde problem+json correctos en todas las rutas de error
-- [x] panic → 500 problem+json (recoverer) sin filtrar stack al cliente
-- [x] `X-Correlation-Id` recibido se preserva en la respuesta y en `instance`
-- [x] cierre graceful: al recibir SIGTERM termina requests en vuelo y corta en `SHUTDOWN_TIMEOUT`
-- [x] semáforo `MaxConcurrency` degrada con 503 (problem+json) cuando está saturado
-
-**Verification:**
-- [x] Tests pass: `make test`
-- [ ] Manual check: `kill -TERM <pid>` no corta requests en vuelo; concatenar 30 requests simultáneos
-
-**Dependencies:** Task 6
-
-**Files likely touched:** `internal/handler/router.go`, `internal/handler/middleware.go`,
-`cmd/orchestrator/main.go`, `internal/config` (si hace falta `MaxBodyBytes` ajuste)
-
-**Estimated scope:** Medium (4-5 files)
-
-### Task 8: Integration E2E en memoria + lint del contrato
-
-**Description:** Tests con build tag `integration`: servidor real + fakes downstream
-(`httptest`) cubren PROCESSED, REUSED, timeout del extractor (504) y verificación de que
-no hay escritura a disco; se valida `api/openapi.yaml` (parseo 3.1) y se agrega README de
-operación (env vars, curls de ejemplo).
-
-**Acceptance criteria:**
-- [x] E2E PROCESSED: upload → fake extractor recibe multipart → fake persistencia recibe JSON → 200
-- [x] E2E REUSED: estado precargado en el fake → 200 sin llamar al fake extractor
-- [x] E2E timeout: fake extractor duerme > timeout → 504 problem+json
-- [x] no hay llamadas a `os.CreateTemp`/S3 en paquetes de producción (escaneo en CI del tag)
-- [x] `openapi.yaml` parsea sin error con parser OpenAPI 3.1 y responde schema `Problem` en todos los errores
-
-**Verification:**
-- [x] Tests pass: `go test -tags=integration ./...`
-- [x] Manual check: correr el flujo completo con los dos fakes y revisar `Content-Length` del request al extractor
-
-**Dependencies:** Task 7
-
-**Files likely touched:** `internal/handler/integration_test.go` (`//go:build integration`),
-`api/openapi.yaml`, `README.md`, `Makefile` (target integration + lint-openapi)
-
-**Estimated scope:** Medium (4-6 files)
-
-### Checkpoint C: Entrega
-- [ ] `make test && make race && make vet && make integration` verde en CI
-- [ ] Contrato OpenAPI 3.1 aprobado (array de `responses` de error ≡ matriz 2.6)
-- [ ] Revisión humana final del diseño (plan.md) y del código antes de primer deploy
+### Checkpoint 5: Entrega
+- [ ] `make ci`, `make integration` y `docker build` verdes
+- [ ] Documentación y configuración coinciden con el código
+- [ ] Contrato HTTP y límites de rendimiento sin cambios (no se corren k6/Vegeta sin permiso)
+- [ ] **Revisión humana final** y aprobación para commitear
 
 ---
 
 ## Definition of Done transversal (aplica a cada Task)
 
-- [x] Código formateado con `gofmt`, sin warnings de `go vet`
-- [ ] `go test ./...` verde; tests con `-race` verde en CI
-- [x] Errores expuestos al cliente SIEMPRE bajo RFC 9457 (`application/problem+json`), nunca texto plano
-- [x] Ninguna ruta de producción escribe a disco ni usa S3/MinIO
-- [x] Todo error sentinel agregado tiene fila en `mapper.Map` + test de `errors.Is`
+- [ ] Código formateado con `gofmt` y sin warnings de `go vet` (`make check-fmt`, `make vet`).
+- [ ] `make test` y `make race` verdes.
+- [ ] Errores al cliente siempre en `application/problem+json`; contrato OpenAPI intacto.
+- [ ] Ninguna ruta de producción escribe a disco ni usa S3/MinIO.
+- [ ] Logs JSON a stdout con `correlation_id`, sin rotación ni archivos.
+- [ ] Sin cambios fuera de `PaperSoul-Microservicio-Orquestador`.
+- [ ] Un commit por tarea (8 commits), siguiendo el orden de `tasks/todo.md`.
+
+## Paralelización segura
+
+- Task 1 y Task 2 son independientes entre sí.
+- Task 3 y Task 4 pueden ejecutarse en paralelo una vez cerrada Task 2.
+- Task 6 y Task 7 pueden ejecutarse en paralelo tras sus dependencias.
+- Task 8 va al final: consume el resultado de todas las anteriores.
