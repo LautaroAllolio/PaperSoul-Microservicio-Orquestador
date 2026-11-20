@@ -62,31 +62,36 @@ Factores 1, 2 y 10.
 actuales, validación positiva y `errors.Join`. Factor 3.
 
 **Acceptance criteria:**
-- [ ] Las 14 variables se leen con defaults que reproducen exactamente el comportamiento
+- [x] Las 14 variables se leen con defaults que reproducen exactamente el comportamiento
       actual (host `orquestador.universidad.localhost`, `https`, `orchestrator`, 2, 500ms,
       10s, 3s, 3s, 1s, 1m, 2s, 5s, 60s, 1).
-- [ ] Un host vacío, una duración ≤ 0 o un entero ≤ 0 hacen fallar `Load()` con un mensaje
-      que nombra la variable (misma forma que `requiredError`).
-- [ ] Ningún archivo de producción conserva el literal `universidad.localhost` fuera de
-      `config.go` (Compose, `.env.example` y README quedan fuera del escaneo).
+- [x] Un host en blanco, una duración ≤ 0 o un entero ≤ 0 hacen fallar `Load()` con un mensaje
+      que nombra la variable (misma forma que `requiredError`). Nota: `envOr` usa el default
+      cuando la variable está vacía, así que "en blanco" se cubre con valores de solo
+      espacios, que sí llegan a la validación.
+- [x] Ningún archivo de producción conserva el literal `universidad.localhost` fuera de
+      `config.go` (solo queda en tests; `buildTags` recibe el host desde `config.Config`).
 
 **Verification:**
-- [ ] Tests pass: `go test ./internal/platform/config/... && make vet`
-- [ ] Build succeeds: `make build`
-- [ ] Manual check: `ORCH_TRAEFIK_RETRY_ATTEMPTS=0 go run ./cmd/orchestrator` sale con código 1
-      y mensaje explícito.
+- [x] Tests pass: `go test ./internal/platform/config/... && make vet` (más `make test`,
+      `make race` e `integration`, todos verdes).
+- [x] Build succeeds: `make build` y `docker build -t papersoul-orchestrator:local .`.
+- [x] Manual check: `ORCH_TRAEFIK_RETRY_ATTEMPTS=0 go run ./cmd/orchestrator` sale con código 1
+      y mensaje `ORCH_TRAEFIK_RETRY_ATTEMPTS debe ser > 0, got 0`.
 
-**Dependencies:** None (paralelizable con Task 1)
+**Dependencies:** None (se ejecutó después de Task 1)
 
-**Files likely touched:** `internal/platform/config/config.go`,
-`internal/platform/config/config_test.go`
+**Files touched:** `internal/platform/config/config.go`,
+`internal/platform/config/config_test.go`, `cmd/orchestrator/main.go`,
+`cmd/orchestrator/main_test.go` (estos dos últimos, para cumplir el criterio del literal)
 
-**Estimated scope:** Medium (2 archivos, ~14 campos)
+**Estimated scope:** Medium (4 archivos, ~14 campos)
 
 ### Checkpoint 1: Fundamentos
-- [ ] `make ci` y `docker build -t papersoul-orchestrator:local .` verdes
-- [ ] `config.Load()` con defaults y con valores inválidos cubierto por tests
-- [ ] Revisión rápida del diff de `.gitignore` (nada de lo vigente se perdió)
+- [x] `make ci` por pasos (check-fmt, vet, test, race, integration, lint-openapi) y
+      `docker build -t papersoul-orchestrator:local .` verdes
+- [x] `config.Load()` con defaults y con valores inválidos cubierto por tests
+- [x] Revisión rápida del diff de `.gitignore` (nada de lo vigente se perdió)
 
 ---
 

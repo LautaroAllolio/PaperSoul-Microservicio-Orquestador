@@ -74,9 +74,9 @@ la suite verde.
 
 ### Phase 0 — Fundamentos
 
-- [ ] **Task 1**: Alinear toolchain Go y reducir `.gitignore` a lo que Go necesita.
-- [ ] **Task 2**: Extender `config.Config` con los parámetros hoy hardcodeados.
-- [ ] **Checkpoint 1**: `make ci` + `docker build` verdes; fail-fast de config verificado.
+- [x] **Task 1**: Alinear toolchain Go y reducir `.gitignore` a lo que Go necesita.
+- [x] **Task 2**: Extender `config.Config` con los parámetros hoy hardcodeados.
+- [x] **Checkpoint 1**: `make ci` + `docker build` verdes; fail-fast de config verificado.
 
 ### Phase 1 — Borde HTTP y composition root
 

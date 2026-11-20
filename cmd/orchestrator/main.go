@@ -33,9 +33,9 @@ const (
 	idleTimeout       = 60 * time.Second
 
 	// Identidad con la que el Orquestador se registra en Consul. El host
-	// público es el que cubre el certificado wildcard *.universidad.localhost.
+	// público se toma de config (ORCH_PUBLIC_HOST): cubre el wildcard del
+	// certificado y se usa en la regla Host(...) publicada a Traefik.
 	consulServiceName = "orchestrator"
-	publicHost        = "orquestador.universidad.localhost"
 
 	// Checks del laboratorio: 3 s detectan una réplica muerta bastante antes
 	// que los 10 s clásicos; el timeout de 1 s evita colgar el check.
@@ -169,7 +169,7 @@ func buildRegistration(cfg config.Config, ln net.Listener) (discovery.Service, e
 		Name:    consulServiceName,
 		Address: advertise,
 		Port:    tcpAddr.Port,
-		Tags:    buildTags(tcpAddr.Port),
+		Tags:    buildTags(tcpAddr.Port, cfg.PublicHost),
 		Check: discovery.Check{
 			HTTP: fmt.Sprintf("http://%s%s",
 				net.JoinHostPort(advertise, strconv.Itoa(tcpAddr.Port)), handler.HealthPath),
@@ -191,7 +191,7 @@ func serviceID(hostname string, port int) string {
 
 // buildTags traduce a tags de Consul el ruteo que antes vivía en labels Docker.
 // Sin traefik.enable=true, Traefik ignora el servicio (exposedByDefault=false).
-func buildTags(port int) []string {
+func buildTags(port int, publicHost string) []string {
 	portTag := strconv.Itoa(port)
 	return []string{
 		"traefik.enable=true",

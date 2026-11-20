@@ -27,6 +27,20 @@ var envVars = []string{
 	"DISCOVERY",
 	"CONSUL_HTTP_ADDR",
 	"ORCH_ADVERTISE_ADDR",
+	"ORCH_PUBLIC_HOST",
+	"ORCH_TRAEFIK_ENTRYPOINT",
+	"ORCH_TRAEFIK_ROUTER",
+	"ORCH_TRAEFIK_RETRY_ATTEMPTS",
+	"ORCH_TRAEFIK_RETRY_INTERVAL",
+	"ORCH_TRAEFIK_HEALTH_INTERVAL",
+	"ORCH_TRAEFIK_HEALTH_TIMEOUT",
+	"ORCH_CONSUL_CHECK_INTERVAL",
+	"ORCH_CONSUL_CHECK_TIMEOUT",
+	"ORCH_CONSUL_DEREGISTER_AFTER",
+	"ORCH_DEREGISTER_TIMEOUT",
+	"ORCH_READ_HEADER_TIMEOUT",
+	"ORCH_IDLE_TIMEOUT",
+	"ORCH_RETRY_AFTER",
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -73,23 +87,80 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.AdvertiseAddr != "" {
 		t.Errorf("AdvertiseAddr = %q, quiero vacío", cfg.AdvertiseAddr)
 	}
+
+	if cfg.PublicHost != "orquestador.universidad.localhost" {
+		t.Errorf("PublicHost = %q, quiero %q", cfg.PublicHost, "orquestador.universidad.localhost")
+	}
+	if cfg.TraefikEntrypoint != "https" {
+		t.Errorf("TraefikEntrypoint = %q, quiero %q", cfg.TraefikEntrypoint, "https")
+	}
+	if cfg.TraefikRouter != "orchestrator" {
+		t.Errorf("TraefikRouter = %q, quiero %q", cfg.TraefikRouter, "orchestrator")
+	}
+	if cfg.TraefikRetryAttempts != 2 {
+		t.Errorf("TraefikRetryAttempts = %d, quiero 2", cfg.TraefikRetryAttempts)
+	}
+	if cfg.TraefikRetryInterval != 500*time.Millisecond {
+		t.Errorf("TraefikRetryInterval = %s, quiero 500ms", cfg.TraefikRetryInterval)
+	}
+	if cfg.TraefikHealthInterval != 10*time.Second {
+		t.Errorf("TraefikHealthInterval = %s, quiero 10s", cfg.TraefikHealthInterval)
+	}
+	if cfg.TraefikHealthTimeout != 3*time.Second {
+		t.Errorf("TraefikHealthTimeout = %s, quiero 3s", cfg.TraefikHealthTimeout)
+	}
+	if cfg.ConsulCheckInterval != 3*time.Second {
+		t.Errorf("ConsulCheckInterval = %s, quiero 3s", cfg.ConsulCheckInterval)
+	}
+	if cfg.ConsulCheckTimeout != time.Second {
+		t.Errorf("ConsulCheckTimeout = %s, quiero 1s", cfg.ConsulCheckTimeout)
+	}
+	if cfg.ConsulDeregisterAfter != time.Minute {
+		t.Errorf("ConsulDeregisterAfter = %s, quiero 1m", cfg.ConsulDeregisterAfter)
+	}
+	if cfg.DeregisterTimeout != 2*time.Second {
+		t.Errorf("DeregisterTimeout = %s, quiero 2s", cfg.DeregisterTimeout)
+	}
+	if cfg.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %s, quiero 5s", cfg.ReadHeaderTimeout)
+	}
+	if cfg.IdleTimeout != 60*time.Second {
+		t.Errorf("IdleTimeout = %s, quiero 60s", cfg.IdleTimeout)
+	}
+	if cfg.RetryAfter != 1 {
+		t.Errorf("RetryAfter = %d, quiero 1", cfg.RetryAfter)
+	}
 }
 
 func TestLoadParsesAllVariables(t *testing.T) {
 	setEnv(t, map[string]string{
-		"ORCH_ADDR":               ":9090",
-		"ORCH_MAX_FILE_SIZE":      "10485760",
-		"ORCH_MAX_BODY_BYTES":     "120",
-		"ORCH_VALIDATION_RELAXED": "false",
-		"ORCH_MAX_CONCURRENCY":    "4",
-		"EXTRACTOR_URL":           extractorURL,
-		"EXTRACTOR_TIMEOUT":       "5s",
-		"PERSISTENCE_URL":         persistenceURL,
-		"PERSISTENCE_TIMEOUT":     "6s",
-		"ORCH_SHUTDOWN_TIMEOUT":   "7s",
-		"DISCOVERY":               "consul",
-		"CONSUL_HTTP_ADDR":        "http://consul:8500",
-		"ORCH_ADVERTISE_ADDR":     "172.18.0.5",
+		"ORCH_ADDR":                    ":9090",
+		"ORCH_MAX_FILE_SIZE":           "10485760",
+		"ORCH_MAX_BODY_BYTES":          "120",
+		"ORCH_VALIDATION_RELAXED":      "false",
+		"ORCH_MAX_CONCURRENCY":         "4",
+		"EXTRACTOR_URL":                extractorURL,
+		"EXTRACTOR_TIMEOUT":            "5s",
+		"PERSISTENCE_URL":              persistenceURL,
+		"PERSISTENCE_TIMEOUT":          "6s",
+		"ORCH_SHUTDOWN_TIMEOUT":        "7s",
+		"DISCOVERY":                    "consul",
+		"CONSUL_HTTP_ADDR":             "http://consul:8500",
+		"ORCH_ADVERTISE_ADDR":          "172.18.0.5",
+		"ORCH_PUBLIC_HOST":             "docs.mi-universidad.localhost",
+		"ORCH_TRAEFIK_ENTRYPOINT":      "websecure",
+		"ORCH_TRAEFIK_ROUTER":          "custom-router",
+		"ORCH_TRAEFIK_RETRY_ATTEMPTS":  "5",
+		"ORCH_TRAEFIK_RETRY_INTERVAL":  "750ms",
+		"ORCH_TRAEFIK_HEALTH_INTERVAL": "20s",
+		"ORCH_TRAEFIK_HEALTH_TIMEOUT":  "4s",
+		"ORCH_CONSUL_CHECK_INTERVAL":   "9s",
+		"ORCH_CONSUL_CHECK_TIMEOUT":    "2s",
+		"ORCH_CONSUL_DEREGISTER_AFTER": "5m",
+		"ORCH_DEREGISTER_TIMEOUT":      "8s",
+		"ORCH_READ_HEADER_TIMEOUT":     "11s",
+		"ORCH_IDLE_TIMEOUT":            "120s",
+		"ORCH_RETRY_AFTER":             "7",
 	})
 
 	want := config.Config{
@@ -106,6 +177,21 @@ func TestLoadParsesAllVariables(t *testing.T) {
 		Discovery:          "consul",
 		ConsulHTTPAddr:     "http://consul:8500",
 		AdvertiseAddr:      "172.18.0.5",
+
+		PublicHost:            "docs.mi-universidad.localhost",
+		TraefikEntrypoint:     "websecure",
+		TraefikRouter:         "custom-router",
+		TraefikRetryAttempts:  5,
+		TraefikRetryInterval:  750 * time.Millisecond,
+		TraefikHealthInterval: 20 * time.Second,
+		TraefikHealthTimeout:  4 * time.Second,
+		ConsulCheckInterval:   9 * time.Second,
+		ConsulCheckTimeout:    2 * time.Second,
+		ConsulDeregisterAfter: 5 * time.Minute,
+		DeregisterTimeout:     8 * time.Second,
+		ReadHeaderTimeout:     11 * time.Second,
+		IdleTimeout:           120 * time.Second,
+		RetryAfter:            7,
 	}
 
 	cfg, err := config.Load()
@@ -209,6 +295,93 @@ func TestAggregatesInvalidVariableErrors(t *testing.T) {
 		t.Fatalf("valores inválidos deben fallar")
 	}
 	for _, want := range []string{"ORCH_MAX_FILE_SIZE", "EXTRACTOR_TIMEOUT"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error (%v) no menciona %s", err, want)
+		}
+	}
+}
+
+func TestFailsOnBlankRequiredStrings(t *testing.T) {
+	for _, key := range []string{"ORCH_PUBLIC_HOST", "ORCH_TRAEFIK_ENTRYPOINT", "ORCH_TRAEFIK_ROUTER"} {
+		t.Run(key, func(t *testing.T) {
+			setEnv(t, map[string]string{
+				key:               "   ",
+				"EXTRACTOR_URL":   extractorURL,
+				"PERSISTENCE_URL": persistenceURL,
+			})
+			_, err := config.Load()
+			if err == nil {
+				t.Fatalf("%s en blanco debe fallar", key)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Fatalf("error (%v) no menciona %s", err, key)
+			}
+		})
+	}
+}
+
+func TestFailsOnNonPositiveDurations(t *testing.T) {
+	keys := []string{
+		"ORCH_TRAEFIK_RETRY_INTERVAL",
+		"ORCH_TRAEFIK_HEALTH_INTERVAL",
+		"ORCH_TRAEFIK_HEALTH_TIMEOUT",
+		"ORCH_CONSUL_CHECK_INTERVAL",
+		"ORCH_CONSUL_CHECK_TIMEOUT",
+		"ORCH_CONSUL_DEREGISTER_AFTER",
+		"ORCH_DEREGISTER_TIMEOUT",
+		"ORCH_READ_HEADER_TIMEOUT",
+		"ORCH_IDLE_TIMEOUT",
+	}
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			setEnv(t, map[string]string{
+				key:               "0s",
+				"EXTRACTOR_URL":   extractorURL,
+				"PERSISTENCE_URL": persistenceURL,
+			})
+			_, err := config.Load()
+			if err == nil {
+				t.Fatalf("%s = 0s debe fallar", key)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Fatalf("error (%v) no menciona %s", err, key)
+			}
+		})
+	}
+}
+
+func TestFailsOnNonPositiveIntegers(t *testing.T) {
+	for _, key := range []string{"ORCH_TRAEFIK_RETRY_ATTEMPTS", "ORCH_RETRY_AFTER"} {
+		t.Run(key, func(t *testing.T) {
+			setEnv(t, map[string]string{
+				key:               "0",
+				"EXTRACTOR_URL":   extractorURL,
+				"PERSISTENCE_URL": persistenceURL,
+			})
+			_, err := config.Load()
+			if err == nil {
+				t.Fatalf("%s = 0 debe fallar", key)
+			}
+			if !strings.Contains(err.Error(), key) {
+				t.Fatalf("error (%v) no menciona %s", err, key)
+			}
+		})
+	}
+}
+
+func TestFailsOnMalformedNewVariables(t *testing.T) {
+	setEnv(t, map[string]string{
+		"ORCH_TRAEFIK_RETRY_ATTEMPTS": "many",
+		"ORCH_TRAEFIK_HEALTH_TIMEOUT": "forever",
+		"EXTRACTOR_URL":               extractorURL,
+		"PERSISTENCE_URL":             persistenceURL,
+	})
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatalf("valores malformados deben fallar")
+	}
+	for _, want := range []string{"ORCH_TRAEFIK_RETRY_ATTEMPTS", "ORCH_TRAEFIK_HEALTH_TIMEOUT"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error (%v) no menciona %s", err, want)
 		}

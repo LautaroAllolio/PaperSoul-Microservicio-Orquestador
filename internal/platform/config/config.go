@@ -21,6 +21,23 @@ const (
 	// defaultDiscovery es static: go run, tests e integración siguen
 	// funcionando sin Consul. Los Compose fijan DISCOVERY=consul.
 	defaultDiscovery = "static"
+
+	// Defaults del borde y del registro. Todos reproducen los literales que
+	// había en main.go/middleware.go antes de externalizarlos.
+	defaultPublicHost            = "orquestador.universidad.localhost"
+	defaultTraefikEntrypoint     = "https"
+	defaultTraefikRouter         = "orchestrator"
+	defaultTraefikRetryAttempts  = 2
+	defaultTraefikRetryInterval  = 500 * time.Millisecond
+	defaultTraefikHealthInterval = 10 * time.Second
+	defaultTraefikHealthTimeout  = 3 * time.Second
+	defaultConsulCheckInterval   = 3 * time.Second
+	defaultConsulCheckTimeout    = time.Second
+	defaultConsulDeregisterAfter = time.Minute
+	defaultDeregisterTimeout     = 2 * time.Second
+	defaultReadHeaderTimeout     = 5 * time.Second
+	defaultIdleTimeout           = 60 * time.Second
+	defaultRetryAfter            = 1
 )
 
 type Config struct {
@@ -41,6 +58,25 @@ type Config struct {
 	// AdvertiseAddr fuerza la IP con la que la instancia se registra en Consul.
 	// Vacía = autodetección de la primera IPv4 no loopback.
 	AdvertiseAddr string
+
+	// PublicHost es el host público cubierto por el certificado wildcard; se
+	// usa en la regla Host(...) que se publica como tag de Traefik.
+	PublicHost string
+	// TraefikEntrypoint y TraefikRouter fijan el entrypoint y el nombre del
+	// router/middleware/service generado en el registro de Consul.
+	TraefikEntrypoint     string
+	TraefikRouter         string
+	TraefikRetryAttempts  int
+	TraefikRetryInterval  time.Duration
+	TraefikHealthInterval time.Duration
+	TraefikHealthTimeout  time.Duration
+	ConsulCheckInterval   time.Duration
+	ConsulCheckTimeout    time.Duration
+	ConsulDeregisterAfter time.Duration
+	DeregisterTimeout     time.Duration
+	ReadHeaderTimeout     time.Duration
+	IdleTimeout           time.Duration
+	RetryAfter            int
 }
 
 func Load() (Config, error) {
@@ -98,6 +134,97 @@ func Load() (Config, error) {
 	cfg.ConsulHTTPAddr = envOr("CONSUL_HTTP_ADDR", "")
 	cfg.AdvertiseAddr = envOr("ORCH_ADVERTISE_ADDR", "")
 
+	cfg.PublicHost = strings.TrimSpace(envOr("ORCH_PUBLIC_HOST", defaultPublicHost))
+	if cfg.PublicHost == "" {
+		errs = append(errs, requiredError("ORCH_PUBLIC_HOST"))
+	}
+
+	cfg.TraefikEntrypoint = strings.TrimSpace(envOr("ORCH_TRAEFIK_ENTRYPOINT", defaultTraefikEntrypoint))
+	if cfg.TraefikEntrypoint == "" {
+		errs = append(errs, requiredError("ORCH_TRAEFIK_ENTRYPOINT"))
+	}
+	cfg.TraefikRouter = strings.TrimSpace(envOr("ORCH_TRAEFIK_ROUTER", defaultTraefikRouter))
+	if cfg.TraefikRouter == "" {
+		errs = append(errs, requiredError("ORCH_TRAEFIK_ROUTER"))
+	}
+
+	traefikRetryAttempts, err := parseInt("ORCH_TRAEFIK_RETRY_ATTEMPTS", defaultTraefikRetryAttempts)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.TraefikRetryAttempts = traefikRetryAttempts
+	errs = append(errs, positiveInt("ORCH_TRAEFIK_RETRY_ATTEMPTS", traefikRetryAttempts))
+
+	traefikRetryInterval, err := parseDuration("ORCH_TRAEFIK_RETRY_INTERVAL", defaultTraefikRetryInterval)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.TraefikRetryInterval = traefikRetryInterval
+	errs = append(errs, positiveDuration("ORCH_TRAEFIK_RETRY_INTERVAL", traefikRetryInterval))
+
+	traefikHealthInterval, err := parseDuration("ORCH_TRAEFIK_HEALTH_INTERVAL", defaultTraefikHealthInterval)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.TraefikHealthInterval = traefikHealthInterval
+	errs = append(errs, positiveDuration("ORCH_TRAEFIK_HEALTH_INTERVAL", traefikHealthInterval))
+
+	traefikHealthTimeout, err := parseDuration("ORCH_TRAEFIK_HEALTH_TIMEOUT", defaultTraefikHealthTimeout)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.TraefikHealthTimeout = traefikHealthTimeout
+	errs = append(errs, positiveDuration("ORCH_TRAEFIK_HEALTH_TIMEOUT", traefikHealthTimeout))
+
+	consulCheckInterval, err := parseDuration("ORCH_CONSUL_CHECK_INTERVAL", defaultConsulCheckInterval)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.ConsulCheckInterval = consulCheckInterval
+	errs = append(errs, positiveDuration("ORCH_CONSUL_CHECK_INTERVAL", consulCheckInterval))
+
+	consulCheckTimeout, err := parseDuration("ORCH_CONSUL_CHECK_TIMEOUT", defaultConsulCheckTimeout)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.ConsulCheckTimeout = consulCheckTimeout
+	errs = append(errs, positiveDuration("ORCH_CONSUL_CHECK_TIMEOUT", consulCheckTimeout))
+
+	consulDeregisterAfter, err := parseDuration("ORCH_CONSUL_DEREGISTER_AFTER", defaultConsulDeregisterAfter)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.ConsulDeregisterAfter = consulDeregisterAfter
+	errs = append(errs, positiveDuration("ORCH_CONSUL_DEREGISTER_AFTER", consulDeregisterAfter))
+
+	deregisterTimeout, err := parseDuration("ORCH_DEREGISTER_TIMEOUT", defaultDeregisterTimeout)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.DeregisterTimeout = deregisterTimeout
+	errs = append(errs, positiveDuration("ORCH_DEREGISTER_TIMEOUT", deregisterTimeout))
+
+	readHeaderTimeout, err := parseDuration("ORCH_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.ReadHeaderTimeout = readHeaderTimeout
+	errs = append(errs, positiveDuration("ORCH_READ_HEADER_TIMEOUT", readHeaderTimeout))
+
+	idleTimeout, err := parseDuration("ORCH_IDLE_TIMEOUT", defaultIdleTimeout)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.IdleTimeout = idleTimeout
+	errs = append(errs, positiveDuration("ORCH_IDLE_TIMEOUT", idleTimeout))
+
+	retryAfter, err := parseInt("ORCH_RETRY_AFTER", defaultRetryAfter)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	cfg.RetryAfter = retryAfter
+	errs = append(errs, positiveInt("ORCH_RETRY_AFTER", retryAfter))
+
 	switch cfg.Discovery {
 	case "static":
 		// Las URLs fijas son la fuente de verdad del modo estático.
@@ -122,10 +249,25 @@ func Load() (Config, error) {
 		errs = append(errs, fmt.Errorf("ORCH_MAX_CONCURRENCY debe ser > 0, got %d", cfg.MaxConcurrency))
 	}
 
-	if len(errs) > 0 {
-		return Config{}, errors.Join(errs...)
+	// errors.Join descarta los nil: el criterio es el error resultante, no len(errs).
+	if err := errors.Join(errs...); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func positiveInt(key string, n int) error {
+	if n <= 0 {
+		return fmt.Errorf("%s debe ser > 0, got %d", key, n)
+	}
+	return nil
+}
+
+func positiveDuration(key string, d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("%s debe ser > 0, got %s", key, d)
+	}
+	return nil
 }
 
 func envOr(key, fallback string) string {

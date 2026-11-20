@@ -40,6 +40,7 @@ func testConfig() config.Config {
 		MaxBodyBytes:    4096,
 		MaxConcurrency:  4,
 		ShutdownTimeout: 2 * time.Second,
+		PublicHost:      "orquestador.universidad.localhost",
 	}
 }
 
@@ -232,7 +233,7 @@ func TestServeAplicaElTimeoutDeCierre(t *testing.T) {
 }
 
 func TestBuildTagsIncluyeElContratoDeTraefikPorConsul(t *testing.T) {
-	tags := buildTags(8080)
+	tags := buildTags(8080, testConfig().PublicHost)
 
 	want := []string{
 		"traefik.enable=true",
@@ -263,7 +264,7 @@ func TestBuildTagsIncluyeElContratoDeTraefikPorConsul(t *testing.T) {
 	if len(tags) != len(want) {
 		t.Fatalf("tags = %d, quiero %d: %v", len(tags), len(want), tags)
 	}
-	if got := buildTags(9000)[5]; got != "traefik.http.services.orchestrator.loadbalancer.server.port=9000" {
+	if got := buildTags(9000, testConfig().PublicHost)[5]; got != "traefik.http.services.orchestrator.loadbalancer.server.port=9000" {
 		t.Fatalf("la tag del puerto no sigue al puerto real: %q", got)
 	}
 }
