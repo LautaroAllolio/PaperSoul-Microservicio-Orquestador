@@ -32,6 +32,20 @@ func TestValidateValidPDFReturnsPageCountAndRewinds(t *testing.T) {
 	}
 }
 
+func TestValidateDoesNotUseConfigDir(t *testing.T) {
+	if got := pdfcpumodel.ConfigPath; got != "disable" {
+		t.Fatalf("ConfigPath = %q, quiero disable (rootfs read-only)", got)
+	}
+
+	// Si pdfcpu intentara crear ~/.config/pdfcpu acá, el MkdirAll fallaría y
+	// entraría en panic: es exactamente lo que pasaba en el contenedor.
+	t.Setenv("HOME", "/proc/no-existe")
+	t.Setenv("XDG_CONFIG_HOME", "/proc/no-existe")
+	if _, err := pdf.New(true).Validate(bytes.NewReader(validFixture(t))); err != nil {
+		t.Fatalf("validación dependiente del directorio de configuración: %v", err)
+	}
+}
+
 func TestValidateCorruptPDFReturnsErrPDFCorrupted(t *testing.T) {
 	_, err := pdf.New(true).Validate(bytes.NewReader(corruptFixture(t)))
 	if !errors.Is(err, errorsvc.ErrPDFCorrupted) {

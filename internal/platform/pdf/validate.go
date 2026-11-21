@@ -10,6 +10,15 @@ import (
 	pdfcpumodel "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
+// pdfcpu crea por defecto ~/.config/pdfcpu (config.yml, fuentes y certificados).
+// El contenedor corre con rootfs read-only y como usuario nonroot, así que ese
+// MkdirAll falla y NewDefaultConfiguration entra en panic. Deshabilitar el dir
+// de configuración usa los defaults en memoria: el Orquestador no escribe a
+// disco y la validación sigue siendo idéntica.
+func init() {
+	pdfcpuapi.DisableConfigDir()
+}
+
 type Validator struct {
 	relaxed bool
 }
